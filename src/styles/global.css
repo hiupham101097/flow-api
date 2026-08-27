@@ -544,6 +544,8 @@ input:focus-visible {
   border: 1px solid var(--line);
   border-radius: 10px;
   background: #080e16;
+  display: flex;
+  flex-direction: column;
 }
 
 .code-caption {
@@ -584,6 +586,7 @@ input:focus-visible {
   font-size: 0.72rem;
   line-height: 1.65;
   white-space: pre;
+  flex: 1;
 }
 
 .platform-note {
@@ -773,6 +776,7 @@ table {
   width: 100%;
   border-collapse: collapse;
   font-variant-numeric: tabular-nums;
+  table-layout: fixed;
 }
 
 th,
@@ -780,7 +784,18 @@ td {
   padding: 0.9rem 1.1rem;
   text-align: left;
   border-bottom: 1px solid var(--line);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+
+th:nth-child(1) { width: 140px; } /* Timestamp */
+th:nth-child(2) { width: 130px; } /* Service */
+th:nth-child(3) { width: 90px; }  /* Method */
+th:nth-child(4) { width: auto; }  /* Endpoint */
+th:nth-child(5) { width: 85px; }  /* Status */
+th:nth-child(6) { width: 110px; } /* Duration */
+th:nth-child(7) { width: 90px; }  /* Action */
 
 th {
   background: var(--surface-muted);
@@ -858,13 +873,12 @@ tbody tr.row-error:hover {
 .status-badge.error { background: var(--danger-soft); color: var(--danger); }
 
 .endpoint-cell {
-  max-width: 380px;
-  overflow: hidden;
   color: #c8d3df;
   font-family: var(--font-mono);
   font-size: 0.72rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+  overflow: hidden;
 }
 
 .view-btn {

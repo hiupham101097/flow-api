@@ -14,7 +14,11 @@ const ANDROID_PERMISSION = '<uses-permission android:name="android.permission.IN
 const FLUTTER_CLIENT = `import 'package:http/http.dart' as http;
 import 'api_logger.dart';
 
-final http.Client client = LoggingClient(http.Client());`;
+// You can pass an appId to distinguish between multiple apps
+final http.Client client = LoggingClient(
+  http.Client(), 
+  appId: 'my_flutter_app',
+);`;
 
 function CodeBlock({ label, value, copyKey, copiedItem, onCopy }) {
   return (

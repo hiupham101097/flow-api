@@ -10,13 +10,15 @@ import 'package:http/http.dart' as http;
 
 class LoggingClient extends http.BaseClient {
   final http.Client _inner;
+  final String appId;
+  
   static const String _apiMonitorUrl = String.fromEnvironment(
     'API_MONITOR_URL',
     defaultValue: 'https://flow-api.hieupham101097.workers.dev',
   );
   final String _workerUrl = '$_apiMonitorUrl/logs';
 
-  LoggingClient(this._inner);
+  LoggingClient(this._inner, {this.appId = 'default_app'});
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
@@ -58,6 +60,7 @@ class LoggingClient extends http.BaseClient {
     required int durationMs,
   }) {
     final payload = {
+      'app_id': appId,
       'endpoint': endpoint,
       'method': method,
       'status_code': statusCode,
