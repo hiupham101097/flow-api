@@ -1,0 +1,8 @@
+name = "api-monitor-backend"
+main = "src/worker.js"
+compatibility_date = "2023-10-25"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "api_logs_db"
+database_id = "8aa848e7-5c9e-4d8d-a098-924f3eae1580"
