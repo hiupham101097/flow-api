@@ -10,7 +10,7 @@ import 'package:http/http.dart' as http;
 
 class LoggingClient extends http.BaseClient {
   final http.Client _inner;
-  final String _workerUrl = 'http://127.0.0.1:8787/logs'; // Replace with live Cloudflare URL
+  final String _workerUrl = 'https://flow-api.hieupham101097.workers.dev/logs'; // Live Cloudflare URL
 
   LoggingClient(this._inner);
 
