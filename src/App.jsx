@@ -13,6 +13,8 @@ function App() {
           <Route path="dashboard" element={<Dashboard />} />
           {/* Add more admin routes here in the future */}
         </Route>
+
+        <Route path="*" element={<Navigate to="/admin/dashboard" replace />} />
       </Routes>
     </BrowserRouter>
   );
