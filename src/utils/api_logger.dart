@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
-/// API Monitor Logging Client for fizahub (Flutter/Dart)
+/// API Monitor Logging Client for Gden (Flutter/Dart)
 /// 
 /// Instructions:
-/// 1. Copy this file to `lib/app/data/services/api_logger.dart` inside fizahub.
+/// 1. Copy this file to `lib/app/data/services/api_logger.dart` inside Gden.
 /// 2. Use `LoggingClient` instead of `http.Client()` in your repositories/services.
 ///    Example: `final http.Client _httpClient = LoggingClient(http.Client());`
 

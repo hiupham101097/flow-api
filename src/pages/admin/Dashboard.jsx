@@ -140,19 +140,9 @@ function Dashboard() {
     <div className="dashboard-shell">
       <header className="topbar">
         <div className="brand-lockup">
-          <div className="brand-mark" aria-hidden="true">
-            <svg viewBox="0 0 32 32" role="img">
-              <path d="M7 22V10m0 6h7m4-6v12m0-6h7" />
-              <circle cx="7" cy="10" r="2" />
-              <circle cx="7" cy="22" r="2" />
-              <circle cx="18" cy="10" r="2" />
-              <circle cx="18" cy="22" r="2" />
-              <circle cx="25" cy="16" r="2" />
-            </svg>
-          </div>
+          <img src="/logo.png" alt="Gden Monitor" style={{ height: '42px', width: 'auto' }} />
           <div>
-            <h1>Fizahub Monitor</h1>
-            <p>API telemetry, without the noise.</p>
+            <h1>Gden Monitor</h1>
           </div>
         </div>
 
