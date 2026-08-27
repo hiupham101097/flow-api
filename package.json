@@ -8,7 +8,8 @@
     "dev:frontend": "vite",
     "build:frontend": "vite build",
     "build": "npm run build:frontend",
-    "deploy": "npm run build && wrangler deploy",
+    "postinstall": "npm run build",
+    "deploy": "wrangler deploy",
     "deploy:frontend": "npm run deploy",
     "preview:frontend": "vite preview",
     "dev:worker": "wrangler dev src/worker.js --ip 0.0.0.0",
@@ -20,6 +21,7 @@
     "react-router-dom": "^6.22.3"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260827.1",
     "@eslint/js": "^9.15.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
@@ -30,7 +32,6 @@
     "eslint-plugin-react-refresh": "^0.4.14",
     "globals": "^15.12.0",
     "vite": "^6.0.1",
-    "@cloudflare/workers-types": "^4.20231025.0",
-    "wrangler": "^3.15.0"
+    "wrangler": "^4.126.0"
   }
 }
