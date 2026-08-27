@@ -7,10 +7,12 @@
     "dev": "vite",
     "dev:frontend": "vite",
     "build:frontend": "vite build",
-    "deploy:frontend": "npm run build:frontend && wrangler pages deploy dist",
+    "build": "npm run build:frontend",
+    "deploy": "npm run build && wrangler deploy",
+    "deploy:frontend": "npm run deploy",
     "preview:frontend": "vite preview",
     "dev:worker": "wrangler dev src/worker.js --ip 0.0.0.0",
-    "deploy:worker": "wrangler deploy src/worker.js"
+    "deploy:worker": "npm run deploy"
   },
   "dependencies": {
     "react": "^18.3.1",

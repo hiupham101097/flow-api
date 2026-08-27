@@ -56,6 +56,8 @@ export default {
       }
     }
 
-    return new Response('Not found', { status: 404, headers: corsHeaders });
+    // Serve the Vite build for the website and let Cloudflare's SPA fallback
+    // return index.html for client-side routes such as /admin/dashboard.
+    return env.ASSETS.fetch(request);
   },
 };
