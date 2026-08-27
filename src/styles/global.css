@@ -58,6 +58,269 @@ body {
   -webkit-text-fill-color: transparent;
 }
 
+/* Flutter integration guide */
+.integration-panel {
+  margin-bottom: 2rem;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 1rem;
+  background: #172033;
+  box-shadow: 0 14px 32px -24px rgba(0, 0, 0, 0.75);
+}
+
+.integration-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 2rem;
+  padding: 1.5rem 1.75rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.integration-heading h2 {
+  margin-bottom: 0.4rem;
+  font-size: 1.25rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.integration-heading p,
+.integration-step > p {
+  max-width: 68ch;
+  color: #aebdd0;
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+.api-status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.75rem;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.12);
+  color: #6ee7b7;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.api-status > span {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: #34d399;
+  box-shadow: 0 2px 8px rgba(52, 211, 153, 0.42);
+}
+
+.endpoint-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.75rem;
+  background: #111a2b;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.endpoint-row > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 1rem;
+}
+
+.field-label {
+  flex: 0 0 auto;
+  color: #8fa2ba;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.endpoint-row code {
+  overflow: hidden;
+  color: #dbeafe;
+  font-family: 'Fira Code', monospace;
+  font-size: 0.875rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copy-btn,
+.code-caption button {
+  border: 1px solid #42536a;
+  color: #dbeafe;
+  background: #223049;
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
+}
+
+.copy-btn {
+  flex: 0 0 auto;
+  padding: 0.5rem 0.8rem;
+  border-radius: 0.5rem;
+}
+
+.copy-btn:hover,
+.code-caption button:hover {
+  border-color: #60a5fa;
+  color: #ffffff;
+  background: #293b58;
+}
+
+.copy-btn:focus-visible,
+.code-caption button:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.integration-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.integration-step {
+  min-width: 0;
+  padding: 1.5rem 1.75rem;
+}
+
+.integration-step + .integration-step {
+  border-left: 1px solid var(--border-color);
+}
+
+.step-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 0.7rem;
+}
+
+.step-heading > span {
+  display: grid;
+  width: 1.5rem;
+  height: 1.5rem;
+  place-items: center;
+  border-radius: 0.45rem;
+  background: #2563eb;
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.step-heading h3 {
+  font-size: 0.95rem;
+  font-weight: 650;
+}
+
+.inline-code {
+  color: #bfdbfe;
+  font-family: 'Fira Code', monospace;
+  font-size: 0.78rem;
+}
+
+.source-download {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1rem;
+  padding: 0.55rem 0.8rem;
+  border-radius: 0.5rem;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 0.75rem;
+  font-weight: 650;
+  text-decoration: none;
+  transition: background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.source-download:hover {
+  background: #1d4ed8;
+  box-shadow: 0 6px 16px -10px rgba(96, 165, 250, 0.8);
+}
+
+.source-download:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 3px;
+}
+
+.code-block {
+  margin-top: 1rem;
+  overflow: hidden;
+  border-radius: 0.65rem;
+  background: #0c1423;
+}
+
+.code-caption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 2.25rem;
+  padding-left: 0.8rem;
+  border-bottom: 1px solid #27364c;
+  color: #8fa2ba;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.code-caption button {
+  align-self: stretch;
+  min-width: 3.6rem;
+  border-width: 0 0 0 1px;
+  border-radius: 0;
+}
+
+.code-block pre {
+  margin: 0;
+  padding: 0.9rem;
+  overflow-x: auto;
+  color: #dbeafe;
+  font-family: 'Fira Code', monospace;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  white-space: pre;
+}
+
+.code-block-tall pre {
+  min-height: 9.35rem;
+}
+
+.integration-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  padding: 0.9rem 1.75rem;
+  border-top: 1px solid var(--border-color);
+  background: rgba(245, 158, 11, 0.07);
+  color: #f8d58b;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.integration-note code {
+  color: #fde68a;
+  font-family: 'Fira Code', monospace;
+}
+
+.integration-note span {
+  color: #d2b873;
+}
+
+.copy-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* Stats */
 .stats-grid {
   display: grid;
@@ -357,4 +620,75 @@ tr.row-error:hover {
 .log-code.error-highlight {
   border-color: rgba(239, 68, 68, 0.5);
   color: #fca5a5;
+}
+
+@media (max-width: 980px) {
+  .integration-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .integration-step + .integration-step {
+    border-top: 1px solid var(--border-color);
+    border-left: 0;
+  }
+
+  .code-block-tall pre {
+    min-height: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .dashboard-container {
+    padding: 1rem;
+  }
+
+  .header,
+  .integration-heading,
+  .endpoint-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .header {
+    gap: 1rem;
+    padding: 1.25rem;
+  }
+
+  .refresh-btn,
+  .copy-btn {
+    width: 100%;
+  }
+
+  .integration-heading,
+  .integration-step {
+    padding: 1.25rem;
+  }
+
+  .endpoint-row {
+    padding: 1rem 1.25rem;
+  }
+
+  .endpoint-row > div {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+
+  .endpoint-row code {
+    width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .search-input {
+    width: 100%;
+  }
+
+  .tabs {
+    width: 100%;
+  }
+
+  .tab-btn {
+    flex: 1;
+  }
 }
