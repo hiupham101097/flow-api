@@ -12,7 +12,9 @@ export default {
 
     const url = new URL(request.url);
 
-    if (url.pathname === '/logs' && request.method === 'GET') {
+    const path = url.pathname.replace(/\/+$/, '').replace(/^\/+/, '/');
+
+    if (path === '/logs' && request.method === 'GET') {
       try {
         const { results } = await env.DB.prepare(
           'SELECT * FROM api_logs ORDER BY created_at DESC LIMIT 100'
@@ -28,7 +30,7 @@ export default {
       }
     }
 
-    if (url.pathname === '/logs' && request.method === 'POST') {
+    if (path === '/logs' && request.method === 'POST') {
       try {
         const body = await request.json();
         const { endpoint, method, status_code, error_message, request_payload, response_payload, duration_ms } = body;

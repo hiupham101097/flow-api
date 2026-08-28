@@ -73,6 +73,15 @@ class LoggingClient extends http.BaseClient {
       Uri.parse(_workerUrl),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode(payload),
-    ).catchError((_) => http.Response('', 500)); // Ignore telemetry errors
+    ).then((response) {
+      if (response.statusCode >= 400) {
+        print('🚨 [Telemetry Error] Worker returned ${response.statusCode}: ${response.body}');
+      } else {
+        print('✅ [Telemetry Success] Logged to $_workerUrl');
+      }
+    }).catchError((e) {
+      print('🚨 [Telemetry Exception] Failed to reach $_workerUrl: $e');
+      return http.Response('', 500);
+    });
   }
 }
