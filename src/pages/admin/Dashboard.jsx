@@ -380,10 +380,34 @@ function Dashboard() {
                 <section className="log-section"><h3>Error</h3><div className="log-code error-highlight">{selectedLog.error_message}</div></section>
               )}
               {selectedLog.request_payload && (
-                <section className="log-section"><h3>Request payload</h3><div className="log-code">{selectedLog.request_payload}</div></section>
+                <section className="log-section">
+                  <h3>Request payload</h3>
+                  <pre className="log-code" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                    {(() => {
+                      try {
+                        const parsed = typeof selectedLog.request_payload === 'string' ? JSON.parse(selectedLog.request_payload) : selectedLog.request_payload;
+                        return JSON.stringify(parsed, null, 2);
+                      } catch (e) {
+                        return selectedLog.request_payload;
+                      }
+                    })()}
+                  </pre>
+                </section>
               )}
               {selectedLog.response_payload && (
-                <section className="log-section"><h3>Response payload</h3><div className="log-code">{selectedLog.response_payload}</div></section>
+                <section className="log-section">
+                  <h3>Response payload</h3>
+                  <pre className="log-code" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                    {(() => {
+                      try {
+                        const parsed = typeof selectedLog.response_payload === 'string' ? JSON.parse(selectedLog.response_payload) : selectedLog.response_payload;
+                        return JSON.stringify(parsed, null, 2);
+                      } catch (e) {
+                        return selectedLog.response_payload;
+                      }
+                    })()}
+                  </pre>
+                </section>
               )}
             </div>
           </div>
