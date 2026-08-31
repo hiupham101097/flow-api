@@ -62,4 +62,16 @@ export default {
     // return index.html for client-side routes such as /admin/dashboard.
     return env.ASSETS.fetch(request);
   },
+
+  async scheduled(event, env, ctx) {
+    try {
+      // Delete logs older than 2 days
+      await env.DB.prepare(
+        "DELETE FROM api_logs WHERE created_at < datetime('now', '-2 days')"
+      ).run();
+      console.log('Successfully deleted old logs');
+    } catch (e) {
+      console.error('Failed to delete old logs:', e.message);
+    }
+  },
 };

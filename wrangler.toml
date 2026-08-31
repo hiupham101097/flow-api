@@ -14,3 +14,6 @@ not_found_handling = "single-page-application"
 binding = "DB"
 database_name = "api_logs_db"
 database_id = "8aa848e7-5c9e-4d8d-a098-924f3eae1580"
+
+[triggers]
+crons = ["0 0 * * *"] # Run daily at midnight UTC
