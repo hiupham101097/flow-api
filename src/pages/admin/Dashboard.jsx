@@ -603,25 +603,24 @@ const res = await monitoredFetch('https://api.example.com/data');`;
           <table>
             <thead>
               <tr>
-                <th>Thời gian</th>
-                <th>Mục tiêu (Job / User)</th>
-                <th>Dịch vụ</th>
-                <th>Method</th>
+                <th style={{ width: '120px' }}>Thời gian</th>
+                <th style={{ width: '22%' }}>Mục tiêu (Job / User)</th>
+                <th style={{ width: '8%' }}>Method</th>
                 <th>Endpoint</th>
-                <th>Trạng thái</th>
-                <th>Dữ liệu / Lỗi tóm tắt</th>
-                <th>Độ trễ</th>
-                <th><span className="sr-only">Thao tác</span></th>
+                <th style={{ width: '80px' }}>Trạng thái</th>
+                <th style={{ width: '22%' }}>Dữ liệu / Lỗi tóm tắt</th>
+                <th style={{ width: '75px' }}>Độ trễ</th>
+                <th style={{ width: '80px' }}><span className="sr-only">Thao tác</span></th>
               </tr>
             </thead>
             <tbody>
               {loading && logs.length === 0 && (
-                <tr><td colSpan="9" className="table-message">Đang kết nối nhận telemetry…</td></tr>
+                <tr><td colSpan="8" className="table-message">Đang kết nối nhận telemetry…</td></tr>
               )}
 
               {filteredLogs.length === 0 && !loading && (
                 <tr>
-                  <td colSpan="9">
+                  <td colSpan="8">
                     <div className="empty-state">
                       <h3>{logs.length === 0 ? 'Chưa có telemetry nào' : 'Không tìm thấy request phù hợp'}</h3>
                       <p>
@@ -635,7 +634,6 @@ const res = await monitoredFetch('https://api.example.com/data');`;
               )}
 
               {filteredLogs.map((log) => {
-                const service = categorizeEndpoint(log.endpoint);
                 const statusMeta = getStatusMeta(log.status_code);
                 const summaryText = getSummarySnippet(log);
                 const isApp = log.job_type === 'app';
@@ -645,20 +643,25 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                     key={log.id}
                     className={statusMeta.type !== '200' ? 'row-error' : ''}
                     onClick={() => setSelectedLog(log)}
+                    style={{ cursor: 'pointer' }}
+                    title="Nhấn để xem chi tiết"
                   >
-                    <td className="timestamp-cell">{formatDate(log.created_at)}</td>
+                    <td className="timestamp-cell" style={{ whiteSpace: 'nowrap', fontSize: '0.78rem', lineHeight: 1.4 }}>
+                      <div>{new Date(log.created_at).toLocaleDateString('vi-VN')}</div>
+                      <div style={{ color: 'var(--text-dim)' }}>{new Date(log.created_at).toLocaleTimeString('vi-VN')}</div>
+                    </td>
                     <td>
                       {log.job_name ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                          <span className={`type-badge ${isApp ? 'type-badge-app' : 'type-badge-web'}`} style={{ width: 'fit-content' }}>
-                            {isApp ? '📱 App' : '🌐 Web'} {log.job_name}
+                          <span className={`type-badge ${isApp ? 'type-badge-app' : 'type-badge-web'}`} style={{ width: 'fit-content', fontSize: '0.72rem' }}>
+                            {isApp ? '📱' : '🌐'} {log.job_name}
                           </span>
                           <small style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>
                             {log.user_name ? `👤 ${log.user_name}` : `ID: ${log.app_identifier || '-'}`}
                           </small>
                         </div>
                       ) : log.app_identifier ? (
-                        <span className="type-badge" style={{ background: 'rgba(148, 163, 184, 0.15)', color: '#94a3b8' }}>
+                        <span className="type-badge" style={{ background: 'rgba(148, 163, 184, 0.15)', color: '#94a3b8', fontSize: '0.72rem' }}>
                           🏷️ {log.app_identifier}
                         </span>
                       ) : (
@@ -666,16 +669,11 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                       )}
                     </td>
                     <td>
-                      <span className="service-badge" style={{ '--service-color': service.color }}>
-                        {service.name}
-                      </span>
-                    </td>
-                    <td>
                       <span className={`method-badge ${(log.method || '').toLowerCase()}`}>
                         {log.method}
                       </span>
                     </td>
-                    <td className="endpoint-cell" title={log.endpoint}>
+                    <td style={{ fontSize: '0.78rem', color: 'var(--text-muted)', wordBreak: 'break-all', maxWidth: '240px' }}>
                       {log.endpoint}
                     </td>
                     <td>
@@ -683,7 +681,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                         {log.status_code || 0}
                       </span>
                     </td>
-                    <td className="summary-cell" title={summaryText}>
+                    <td className="summary-cell" title={summaryText} style={{ fontSize: '0.78rem' }}>
                       <span className={`summary-pill ${statusMeta.pillClass}`}>
                         {summaryText}
                       </span>
@@ -693,6 +691,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                       <button
                         type="button"
                         className="view-btn"
+                        style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}
                         onClick={(event) => {
                           event.stopPropagation();
                           setSelectedLog(log);
@@ -704,6 +703,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                   </tr>
                 );
               })}
+
             </tbody>
           </table>
         </div>
@@ -712,12 +712,13 @@ const res = await monitoredFetch('https://api.example.com/data');`;
       {/* Detail Modal */}
       {selectedLog && (
         <div
-          className="modal-backdrop"
+          className="modal-overlay"
           role="presentation"
           onClick={() => setSelectedLog(null)}
         >
           <div
-            className="modal-container"
+            className="modal-box"
+            style={{ maxWidth: '720px' }}
             role="dialog"
             aria-modal="true"
             aria-labelledby="log-detail-title"
