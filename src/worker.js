@@ -35,6 +35,16 @@ export default {
         const body = await request.json();
         const { endpoint, method, status_code, error_message, request_payload, response_payload, duration_ms } = body;
 
+        const formatPayload = (val) => {
+          if (val === undefined || val === null) return null;
+          if (typeof val === 'string') return val;
+          try {
+            return JSON.stringify(val);
+          } catch {
+            return String(val);
+          }
+        };
+
         await env.DB.prepare(
           'INSERT INTO api_logs (endpoint, method, status_code, error_message, request_payload, response_payload, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)'
         ).bind(
@@ -42,8 +52,8 @@ export default {
           method || 'GET',
           status_code || null,
           error_message || null,
-          request_payload ? JSON.stringify(request_payload) : null,
-          response_payload ? JSON.stringify(response_payload) : null,
+          formatPayload(request_payload),
+          formatPayload(response_payload),
           duration_ms || 0
         ).run();
 
