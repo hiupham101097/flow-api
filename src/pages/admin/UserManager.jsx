@@ -26,6 +26,9 @@ function UserManager() {
   const [snippetModalUser, setSnippetModalUser] = useState(null);
   const [copiedKey, setCopiedKey] = useState(null);
 
+  // Detail Modal
+  const [detailModalUser, setDetailModalUser] = useState(null);
+
   const fetchUsers = async () => {
     try {
       setLoading(true);
@@ -240,7 +243,12 @@ function UserManager() {
                 users.map((u) => {
                   const isApp = u.job_type === 'app';
                   return (
-                    <tr key={u.id}>
+                    <tr
+                      key={u.id}
+                      onClick={() => setDetailModalUser(u)}
+                      style={{ cursor: 'pointer' }}
+                      title="Nhấn để xem chi tiết"
+                    >
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                           <div
@@ -358,7 +366,8 @@ function UserManager() {
                             type="button"
                             className="view-btn"
                             style={{ padding: '0.35rem 0.75rem', fontSize: '0.78rem' }}
-                            onClick={() => {
+                            onClick={(e) => {
+                              e.stopPropagation();
                               navigate(`/admin/dashboard?user_id=${u.id}&job_id=${u.job_id || ''}`);
                             }}
                             title="Lọc logs theo người dùng này"
@@ -369,14 +378,14 @@ function UserManager() {
                             type="button"
                             className="secondary-btn"
                             style={{ padding: '0.35rem 0.65rem', fontSize: '0.78rem' }}
-                            onClick={() => setSnippetModalUser(u)}
+                            onClick={(e) => { e.stopPropagation(); setSnippetModalUser(u); }}
                             title="Xem code tích hợp cho User này"
                           >
                             🔌 Code
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleDeleteUser(u)}
+                            onClick={(e) => { e.stopPropagation(); handleDeleteUser(u); }}
                             style={{
                               background: 'transparent',
                               border: '1px solid rgba(255, 119, 133, 0.3)',
@@ -546,6 +555,91 @@ function UserManager() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Xem chi tiết User */}
+      {detailModalUser && (
+        <div className="modal-overlay" onClick={() => setDetailModalUser(null)}>
+          <div className="modal-box" style={{ maxWidth: '560px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Chi tiết: {detailModalUser.name}</h2>
+              <button
+                type="button"
+                onClick={() => setDetailModalUser(null)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: '1.2rem', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ gap: '0.85rem' }}>
+              {/* User info */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.75rem', background: 'var(--surface-muted)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)' }}>
+                <div style={{
+                  width: '48px', height: '48px', borderRadius: '50%', flexShrink: 0,
+                  background: detailModalUser.job_type === 'app' ? 'rgba(167,139,250,0.18)' : 'rgba(34,211,238,0.18)',
+                  color: detailModalUser.job_type === 'app' ? '#c4b5fd' : '#67e8f9',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontWeight: 700, fontSize: '1.2rem',
+                  border: `1px solid ${detailModalUser.job_type === 'app' ? 'rgba(167,139,250,0.4)' : 'rgba(34,211,238,0.4)'}`,
+                }}>
+                  {detailModalUser.name ? detailModalUser.name.charAt(0).toUpperCase() : 'U'}
+                </div>
+                <div>
+                  <strong style={{ fontSize: '1rem', color: 'var(--text)' }}>{detailModalUser.name}</strong>
+                  <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>{detailModalUser.email}</div>
+                </div>
+              </div>
+
+              {/* Info rows */}
+              {[
+                { label: 'User ID', value: detailModalUser.id, mono: true, copy: `uid-${detailModalUser.id}`, copyVal: detailModalUser.id },
+                { label: 'Job ID', value: detailModalUser.job_id || '—', mono: true, copy: `jid-${detailModalUser.id}`, copyVal: detailModalUser.job_id },
+                { label: 'Loại hình', value: detailModalUser.job_type === 'app' ? '📱 Mobile App' : '🌐 Web App', mono: false },
+                { label: 'Tên Job', value: detailModalUser.job_name || '—', mono: false },
+                { label: 'App Identifier', value: detailModalUser.app_identifier || '—', mono: true, copy: `appid-${detailModalUser.id}`, copyVal: detailModalUser.app_identifier },
+                { label: 'Target URL', value: detailModalUser.target_url || '—', mono: true, copy: `url-${detailModalUser.id}`, copyVal: detailModalUser.target_url },
+              ].map(({ label, value, mono, copy, copyVal }) => (
+                <div key={label} style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', borderBottom: '1px solid var(--line)', paddingBottom: '0.55rem' }}>
+                  <span style={{ minWidth: '130px', fontSize: '0.78rem', color: 'var(--text-dim)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', flexShrink: 0 }}>{label}</span>
+                  <span style={{ flex: 1, fontSize: '0.85rem', color: mono ? 'var(--accent)' : 'var(--text)', fontFamily: mono ? 'monospace' : 'inherit', wordBreak: 'break-all' }}>{value}</span>
+                  {copy && copyVal && (
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(copyVal, copy)}
+                      style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '0.78rem', color: copiedKey === copy ? 'var(--success)' : 'var(--text-muted)', flexShrink: 0 }}
+                      title="Sao chép"
+                    >
+                      {copiedKey === copy ? '✓' : '📋'}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="modal-footer">
+              <button type="button" className="secondary-btn" onClick={() => setDetailModalUser(null)}>Đóng</button>
+              <button
+                type="button"
+                className="secondary-btn"
+                onClick={() => { const u = detailModalUser; setDetailModalUser(null); setSnippetModalUser(u); }}
+              >
+                🔌 Xem Code
+              </button>
+              <button
+                type="button"
+                className="primary-btn"
+                onClick={() => {
+                  const u = detailModalUser;
+                  setDetailModalUser(null);
+                  navigate(`/admin/dashboard?user_id=${u.id}&job_id=${u.job_id || ''}`);
+                }}
+              >
+                📊 Xem Logs
+              </button>
+            </div>
           </div>
         </div>
       )}
