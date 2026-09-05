@@ -18,6 +18,90 @@ function CodeBlock({ label, value, copyKey, copiedItem, onCopy }) {
   );
 }
 
+// Kiểm tra 2 danh sách telemetry có thay đổi thực sự không trước khi re-render
+function hasTelemetryArrayChanged(prev, next) {
+  if (!Array.isArray(next)) return false;
+  if (!Array.isArray(prev) || prev.length !== next.length) return true;
+  if (next.length === 0) return false;
+  // So sánh phần tử đầu tiên (mới nhất) và ID để tránh render thừa
+  return prev[0]?.id !== next[0]?.id || prev[0]?.created_at !== next[0]?.created_at;
+}
+
+// Component phân trang tối ưu bộ nhớ DOM cho WebView
+function PaginationDock({ currentPage, totalItems, pageSize, onPageChange, onPageSizeChange }) {
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const startItem = totalItems === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const endItem = Math.min(totalItems, currentPage * pageSize);
+
+  if (totalItems <= 0) return null;
+
+  return (
+    <div className="pagination-dock">
+      <div className="pagination-info">
+        <span>Hiển thị <strong>{startItem} - {endItem}</strong> / <strong>{totalItems}</strong> mục</span>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', marginLeft: '0.5rem' }}>
+          <span>Mỗi trang:</span>
+          <select
+            className="pagination-size-select"
+            value={pageSize}
+            onChange={(e) => onPageSizeChange(Number(e.target.value))}
+            aria-label="Số dòng mỗi trang"
+          >
+            <option value={10}>10</option>
+            <option value={20}>20 (Mượt nhất)</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="pagination-nav">
+        <button
+          type="button"
+          className="pagination-btn"
+          disabled={currentPage <= 1}
+          onClick={() => onPageChange(1)}
+          title="Trang đầu"
+        >
+          «
+        </button>
+        <button
+          type="button"
+          className="pagination-btn"
+          disabled={currentPage <= 1}
+          onClick={() => onPageChange(currentPage - 1)}
+          title="Trang trước"
+        >
+          ‹
+        </button>
+
+        <span style={{ margin: '0 0.5rem', fontWeight: 600, fontSize: '0.82rem' }}>
+          {currentPage} / {totalPages}
+        </span>
+
+        <button
+          type="button"
+          className="pagination-btn"
+          disabled={currentPage >= totalPages}
+          onClick={() => onPageChange(currentPage + 1)}
+          title="Trang tiếp"
+        >
+          ›
+        </button>
+        <button
+          type="button"
+          className="pagination-btn"
+          disabled={currentPage >= totalPages}
+          onClick={() => onPageChange(totalPages)}
+          title="Trang cuối"
+        >
+          »
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Dashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
   const userIdFromUrl = searchParams.get('user_id');
@@ -39,6 +123,19 @@ function Dashboard() {
   const [eventTab, setEventTab] = useState('all');   // for analytics: 'all', 'custom', 'screen_view'
 
   const [searchTerm, setSearchTerm] = useState('');
+
+  // Pagination states (Mặc định 20 dòng để Mobile WebView mượt tuyệt đối)
+  const [logsPage, setLogsPage] = useState(1);
+  const [logsPageSize, setLogsPageSize] = useState(20);
+
+  const [crashPage, setCrashPage] = useState(1);
+  const [crashPageSize, setCrashPageSize] = useState(20);
+
+  const [eventPage, setEventPage] = useState(1);
+  const [eventPageSize, setEventPageSize] = useState(20);
+
+  // Auto-refresh control (Mặc định 15s để không chiếm dụng CPU WebView)
+  const [refreshInterval, setRefreshInterval] = useState(15000);
 
   // Modals
   const [selectedLog, setSelectedLog] = useState(null);
@@ -93,15 +190,21 @@ function Dashboard() {
 
       if (logsRes.ok) {
         const data = await logsRes.json();
-        setLogs(Array.isArray(data) ? data : []);
+        if (Array.isArray(data)) {
+          setLogs((prev) => hasTelemetryArrayChanged(prev, data) ? data : prev);
+        }
       }
       if (crashesRes.ok) {
         const data = await crashesRes.json();
-        setCrashes(Array.isArray(data) ? data : []);
+        if (Array.isArray(data)) {
+          setCrashes((prev) => hasTelemetryArrayChanged(prev, data) ? data : prev);
+        }
       }
       if (eventsRes.ok) {
         const data = await eventsRes.json();
-        setEvents(Array.isArray(data) ? data : []);
+        if (Array.isArray(data)) {
+          setEvents((prev) => hasTelemetryArrayChanged(prev, data) ? data : prev);
+        }
       }
       setError(null);
     } catch (requestError) {
@@ -125,13 +228,33 @@ function Dashboard() {
     }
   }, [userIdFromUrl]);
 
-  // Polling every 5s for real-time telemetry
+  // Polling thông minh: Chỉ chạy khi tab/webview hiển thị và người dùng bật auto-refresh
   useEffect(() => {
+    if (!refreshInterval || refreshInterval <= 0) return undefined;
+
     const interval = window.setInterval(() => {
+      // Nếu WebView bị ẩn nền (tab ẩn, khóa màn hình), không kéo dữ liệu thừa
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return;
+      }
       fetchAllTelemetry();
-    }, 5000);
+    }, refreshInterval);
+
     return () => window.clearInterval(interval);
-  }, [selectedFilter]);
+  }, [selectedFilter, refreshInterval]);
+
+  // Reset trang về 1 khi đổi bộ lọc hoặc từ khóa tìm kiếm
+  useEffect(() => {
+    setLogsPage(1);
+  }, [activeTab, searchTerm, selectedFilter]);
+
+  useEffect(() => {
+    setCrashPage(1);
+  }, [crashTab, searchTerm, selectedFilter]);
+
+  useEffect(() => {
+    setEventPage(1);
+  }, [eventTab, searchTerm, selectedFilter]);
 
   // Escape to close any open modal
   useEffect(() => {
@@ -297,15 +420,23 @@ const res = await monitoredFetch('https://api.example.com/data');`;
     const meta = getStatusMeta(log.status_code);
     if (meta.type === '200') {
       if (!log.response_payload) return '📦 Trả về 200 OK (Không có payload)';
-      const parsed = parseJsonSafe(log.response_payload);
-      if (Array.isArray(parsed)) {
-        return `📦 Data: [Danh sách ${parsed.length} phần tử]`;
+      const payloadStr = typeof log.response_payload === 'string'
+        ? log.response_payload
+        : JSON.stringify(log.response_payload);
+      const trimmed = payloadStr.trim();
+      if (trimmed.startsWith('[')) {
+        return '📦 Data: [Danh sách mảng dữ liệu]';
       }
-      if (typeof parsed === 'object' && parsed !== null) {
-        const keys = Object.keys(parsed).slice(0, 4).join(', ');
-        return `📦 Data: { ${keys}${Object.keys(parsed).length > 4 ? ', …' : ''} }`;
+      if (trimmed.startsWith('{')) {
+        // Trích xuất key nhanh bằng regex, không parse JSON nặng làm đơ WebView
+        const matches = trimmed.slice(0, 250).match(/"([^"]+)":/g);
+        if (matches && matches.length > 0) {
+          const keys = matches.slice(0, 3).map((k) => k.replace(/[" :]/g, '')).join(', ');
+          return `📦 Data: { ${keys}${matches.length > 3 ? ', …' : ''} }`;
+        }
+        return '📦 Data: { JSON Object }';
       }
-      return `📦 Data: ${String(parsed).substring(0, 45)}…`;
+      return `📦 Data: ${trimmed.substring(0, 45)}…`;
     }
     if (meta.type === '400') {
       return `⚠️ 4xx: ${log.error_message || 'Yêu cầu không hợp lệ'}`;
@@ -410,6 +541,22 @@ const res = await monitoredFetch('https://api.example.com/data');`;
     });
   }, [events, eventTab, searchTerm]);
 
+  // Sliced data cho phân trang (Cắt nhỏ danh sách hiển thị, tăng tốc 60 FPS cho WebView)
+  const paginatedLogs = useMemo(() => {
+    const start = (logsPage - 1) * logsPageSize;
+    return filteredLogs.slice(start, start + logsPageSize);
+  }, [filteredLogs, logsPage, logsPageSize]);
+
+  const paginatedCrashes = useMemo(() => {
+    const start = (crashPage - 1) * crashPageSize;
+    return filteredCrashes.slice(start, start + crashPageSize);
+  }, [filteredCrashes, crashPage, crashPageSize]);
+
+  const paginatedEvents = useMemo(() => {
+    const start = (eventPage - 1) * eventPageSize;
+    return filteredEvents.slice(start, start + eventPageSize);
+  }, [filteredEvents, eventPage, eventPageSize]);
+
   return (
     <div style={{ paddingTop: '1.25rem' }}>
       {/* Page Title & Controls */}
@@ -424,6 +571,21 @@ const res = await monitoredFetch('https://api.example.com/data');`;
         </div>
 
         <div className="topbar-actions">
+          <div className="auto-refresh-dock">
+            <span style={{ fontSize: '0.78rem' }}>Tự làm mới:</span>
+            <select
+              className="auto-refresh-select"
+              value={refreshInterval}
+              onChange={(e) => setRefreshInterval(Number(e.target.value))}
+              title="Chu kỳ tự động tải dữ liệu mới"
+              aria-label="Chu kỳ tự động tải dữ liệu mới"
+            >
+              <option value={0}>Tắt (Tiết kiệm PIN/RAM)</option>
+              <option value={10000}>10 giây</option>
+              <option value={15000}>15 giây (Khuyên dùng)</option>
+              <option value={30000}>30 giây</option>
+            </select>
+          </div>
           <button
             type="button"
             className="secondary-btn"
@@ -912,7 +1074,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                   </tr>
                 )}
 
-                {filteredLogs.map((log) => {
+                {paginatedLogs.map((log) => {
                   const statusMeta = getStatusMeta(log.status_code);
                   const summaryText = getSummarySnippet(log);
                   const isApp = log.job_type === 'app';
@@ -985,6 +1147,14 @@ const res = await monitoredFetch('https://api.example.com/data');`;
               </tbody>
             </table>
           </div>
+
+          <PaginationDock
+            currentPage={logsPage}
+            totalItems={filteredLogs.length}
+            pageSize={logsPageSize}
+            onPageChange={setLogsPage}
+            onPageSizeChange={(newSize) => { setLogsPageSize(newSize); setLogsPage(1); }}
+          />
         </section>
       )}
 
@@ -1076,7 +1246,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                   </tr>
                 )}
 
-                {filteredCrashes.map((crash) => {
+                {paginatedCrashes.map((crash) => {
                   const isFatal = Number(crash.is_fatal) === 1;
                   const deviceInfoParsed = parseJsonSafe(crash.device_info);
 
@@ -1142,6 +1312,14 @@ const res = await monitoredFetch('https://api.example.com/data');`;
               </tbody>
             </table>
           </div>
+
+          <PaginationDock
+            currentPage={crashPage}
+            totalItems={filteredCrashes.length}
+            pageSize={crashPageSize}
+            onPageChange={setCrashPage}
+            onPageSizeChange={(newSize) => { setCrashPageSize(newSize); setCrashPage(1); }}
+          />
         </section>
       )}
 
@@ -1234,7 +1412,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                   </tr>
                 )}
 
-                {filteredEvents.map((event) => {
+                {paginatedEvents.map((event) => {
                   const isScreen = event.event_type === 'screen_view' || event.event_name === 'screen_view';
                   const paramsParsed = parseJsonSafe(event.parameters);
 
@@ -1315,6 +1493,14 @@ const res = await monitoredFetch('https://api.example.com/data');`;
               </tbody>
             </table>
           </div>
+
+          <PaginationDock
+            currentPage={eventPage}
+            totalItems={filteredEvents.length}
+            pageSize={eventPageSize}
+            onPageChange={setEventPage}
+            onPageSizeChange={(newSize) => { setEventPageSize(newSize); setEventPage(1); }}
+          />
         </section>
       )}
 

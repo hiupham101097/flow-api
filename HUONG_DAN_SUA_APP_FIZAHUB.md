@@ -1,44 +1,216 @@
-# 🚀 Hướng dẫn sửa lỗi Login & Tích hợp Telemetry cho App Fizahub
+# 🚀 Hướng Dẫn Sửa Lỗi Login, Tích Hợp Telemetry & Cấu Hình WebView 60 FPS Cho App Fizahub
 
-Tài liệu này được tạo để bạn áp dụng trực tiếp vào dự án Flutter **Fizahub** (`F:\job\fizahub`).
+> 🎯 **Mục tiêu:** Tài liệu này được thiết kế theo dạng **"Cầm tay chỉ việc"** cho dự án Flutter **Fizahub** (`F:\job\fizahub`). 
+> Bất kỳ ai, dù mới làm quen với Flutter, chỉ cần làm đúng **5 bước tuần tự** bên dưới là app sẽ chạy mượt mà, không bao giờ bị crash khi login, có telemetry theo dõi lỗi và WebView cuộn 60 FPS không giựt lag.
 
 ---
 
-## PHẦN 1: TẠI SAO POSTMAN ĐĂNG NHẬP ĐƯỢC MÀ APP LẠI BỊ LỖI?
+## 📋 BẢNG TỔNG HỢP CÔNG VIỆC CẦN LÀM (LÀM TRONG 5 PHÚT)
 
-Dựa vào JSON thực tế bạn đăng nhập trên Postman:
-```json
-{
-  "status": "success",
-  "code": 200,
-  "message": "Đăng nhập thành công",
-  "data": {
-    "id": "266",               <-- ⚠️ Chuỗi String, không phải int
-    "ATM": {
-      "tenTaiKhoan": null,     <-- ⚠️ Bị null, nếu model không để String? sẽ crash
-      "soTaiKhoan": null,      <-- ⚠️ Bị null
-      "maBank": null,          <-- ⚠️ Bị null
-      "qrBank": "https://..."
-    },
-    "listIdShop": "252,297",   <-- ⚠️ Chuỗi String, không phải List<int>
-    "EKYC": true,              <-- boolean
-    "data_cccd": {
-      "ekyc": 4                <-- ⚠️ Ở đây lại là số int 4
+| Bước | File cần thao tác trong App Fizahub | Thao tác cần làm | Kết quả đạt được |
+| :--- | :--- | :--- | :--- |
+| **Bước 1** | `lib/core/api_logger.dart` | Tạo file và dán code SDK | Có sẵn bộ ghi log, crash & sự kiện |
+| **Bước 2** | `lib/models/user_model.dart` | Thay thế toàn bộ bằng code model chuẩn | Hết 100% lỗi crash TypeError khi login |
+| **Bước 3** | File chứa hàm Login (`auth_service.dart`) | Thay hàm `login()` bằng hàm chuẩn | Đăng nhập thành công, tự đẩy log lên Web |
+| **Bước 4** | `lib/main.dart` | Thêm hook trong hàm `main()` | Bắt lỗi sập app (Crashlytics) tự động |
+| **Bước 5** | Màn hình WebView (nếu có dùng) | Cấu hình WebView chuẩn 60 FPS | Vuốt lướt mượt, không giựt lag |
+
+---
+
+## 🛠️ CHI TIẾT TỪNG BƯỚC THỰC HIỆN
+
+### BƯỚC 1: Tạo File SDK Telemetry Dùng Chung
+
+* 📂 **Vị trí file:** Tạo file mới tại `lib/core/api_logger.dart` (Nếu chưa có thư mục `core` trong `lib/`, hãy tạo thư mục `core`).
+* 🎯 **Thao tác:** Copy toàn bộ file có sẵn từ dự án `flow-api` tại đường dẫn:
+  👉 `F:\job\flow-api\public\flutter\api_logger.dart`
+  và dán vào file `lib/core/api_logger.dart` của bạn.
+
+> 💡 *Nếu muốn copy nhanh, code file này như sau:*
+
+```dart
+// lib/core/api_logger.dart
+import 'dart:async';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+
+class AppTelemetry {
+  static String? _appId;
+  static String _serverUrl = 'https://flow-api.hieupham101097.workers.dev';
+
+  static void initialize({required String appId, String? serverUrl}) {
+    _appId = appId;
+    if (serverUrl != null && serverUrl.isNotEmpty) {
+      _serverUrl = serverUrl;
     }
+  }
+
+  static String get appId => _appId ?? 'vn.fizahub.app';
+  static String get serverUrl => _serverUrl;
+
+  // Ghi nhận lỗi Crash / Exception (Thay thế hoặc chạy song song Firebase Crashlytics)
+  static Future<void> recordCrash({
+    required dynamic exception,
+    StackTrace? stack,
+    bool isFatal = false,
+    Map<String, dynamic>? deviceInfo,
+  }) async {
+    try {
+      final payload = {
+        'app_id': appId,
+        'error_message': exception.toString(),
+        'stack_trace': stack?.toString() ?? '',
+        'is_fatal': isFatal ? 1 : 0,
+        'device_info': deviceInfo ?? {},
+      };
+
+      http.post(
+        Uri.parse('$serverUrl/crashes'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      ).catchError((_) => http.Response('', 500));
+    } catch (_) {}
+  }
+
+  // Ghi nhận sự kiện người dùng (Thay thế hoặc chạy song song Firebase Analytics)
+  static Future<void> logEvent(
+    String eventName, {
+    Map<String, dynamic>? parameters,
+    String? userId,
+  }) async {
+    try {
+      final payload = {
+        'app_id': appId,
+        'event_name': eventName,
+        'event_type': 'custom',
+        'parameters': parameters ?? {},
+        'user_id': userId,
+      };
+
+      http.post(
+        Uri.parse('$serverUrl/events'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      ).catchError((_) => http.Response('', 500));
+    } catch (_) {}
+  }
+
+  // Ghi nhận chuyển màn hình (Screen View)
+  static Future<void> logScreenView(
+    String screenName, {
+    Map<String, dynamic>? parameters,
+    String? userId,
+  }) async {
+    try {
+      final payload = {
+        'app_id': appId,
+        'event_name': 'screen_view',
+        'event_type': 'screen_view',
+        'screen_name': screenName,
+        'parameters': parameters ?? {},
+        'user_id': userId,
+      };
+
+      http.post(
+        Uri.parse('$serverUrl/events'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      ).catchError((_) => http.Response('', 500));
+    } catch (_) {}
+  }
+}
+
+// Client HTTP tự động gửi log mỗi khi app gọi API
+class LoggingClient extends http.BaseClient {
+  final http.Client _inner;
+  final String appId;
+  final String serverUrl;
+
+  LoggingClient(
+    this._inner, {
+    this.appId = 'vn.fizahub.app',
+    this.serverUrl = 'https://flow-api.hieupham101097.workers.dev',
+  });
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final startTime = DateTime.now();
+    http.StreamedResponse response;
+    try {
+      response = await _inner.send(request);
+      final duration = DateTime.now().difference(startTime).inMilliseconds;
+
+      final bytes = await response.stream.toBytes();
+      final responseBody = utf8.decode(bytes, allowMalformed: true);
+
+      // Gửi log bất đồng bộ lên Cloudflare, không làm chậm app
+      _sendLog(
+        endpoint: request.url.toString(),
+        method: request.method,
+        statusCode: response.statusCode,
+        durationMs: duration,
+        responsePayload: responseBody,
+      );
+
+      return http.StreamedResponse(
+        Stream.value(bytes),
+        response.statusCode,
+        contentLength: bytes.length,
+        headers: response.headers,
+        isRedirect: response.isRedirect,
+        persistentConnection: response.persistentConnection,
+        reasonPhrase: response.reasonPhrase,
+        request: response.request,
+      );
+    } catch (e, stack) {
+      final duration = DateTime.now().difference(startTime).inMilliseconds;
+      _sendLog(
+        endpoint: request.url.toString(),
+        method: request.method,
+        statusCode: 500,
+        durationMs: duration,
+        errorMessage: e.toString(),
+      );
+      AppTelemetry.recordCrash(exception: e, stack: stack, isFatal: false);
+      rethrow;
+    }
+  }
+
+  void _sendLog({
+    required String endpoint,
+    required String method,
+    required int statusCode,
+    required int durationMs,
+    String? responsePayload,
+    String? errorMessage,
+  }) {
+    try {
+      http.post(
+        Uri.parse('$serverUrl/logs'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'app_id': appId,
+          'endpoint': endpoint,
+          'method': method,
+          'status_code': statusCode,
+          'duration_ms': durationMs,
+          'response_payload': responsePayload,
+          'error_message': errorMessage,
+        }),
+      ).catchError((_) => http.Response('', 500));
+    } catch (_) {}
   }
 }
 ```
 
-👉 **Nguyên nhân:** Model hiện tại trong App của bạn bị **Crash Exception (TypeError)** khi parse JSON vì:
-1. Trường `id` trả về là chuỗi `"266"` nhưng trong model khai báo `int id`.
-2. Object `ATM` trả về các giá trị `null` nhưng model khai báo non-nullable.
-3. Lấy trực tiếp `response.body` thay vì lấy từ `json['data']`.
-
 ---
 
-## PHẦN 2: FILE MODEL DART CHUẨN (CRASH-PROOF 100%)
+### BƯỚC 2: Cập Nhật File Model `user_model.dart` (Chống Crash 100%)
 
-Bạn tạo hoặc thay thế file model trong project Flutter của bạn (ví dụ: `lib/models/user_model.dart`):
+* 📂 **Vị trí file:** Mở file `lib/models/user_model.dart` trong project Fizahub.
+* 🎯 **Thao tác:** Xóa sạch toàn bộ nội dung cũ trong file đó và dán toàn bộ đoạn code dưới đây vào.
+* ❓ **Tại sao phải làm vậy?** 
+  Backend trả về `id: "266"` (chuỗi String) chứ không phải số `int`, và object `ATM` chứa các giá trị `null`. Model cũ của bạn ép kiểu số nguyên hoặc không cho phép null nên app bị văng (TypeError crash) ngay khi vừa nhận phản hồi thành công từ server!
 
 ```dart
 // lib/models/user_model.dart
@@ -100,17 +272,15 @@ class UserModel {
     this.linkExcelImportMatHang,
   });
 
-  // Hàm chuyển listIdShop thành danh sách List<String> an toàn khi cần dùng
+  // Chuyển chuỗi "252,297" thành danh sách List<String> an toàn
   List<String> get shopIds =>
       listIdShop?.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList() ?? [];
 
   factory UserModel.fromJson(Map<String, dynamic>? json) {
-    if (json == null) {
-      return UserModel(id: '');
-    }
+    if (json == null) return UserModel(id: '');
 
     return UserModel(
-      // An toàn tuyệt đối: Dù backend trả về int 266 hay String "266" đều không bị crash
+      // An toàn tuyệt đối: Dù server trả về int 266 hay chuỗi "266" đều không bị crash
       id: json['id']?.toString() ?? '',
       idkey: json['idkey']?.toString(),
       reflink: json['reflink']?.toString(),
@@ -207,7 +377,6 @@ class AtmModel {
     if (json == null) return AtmModel();
 
     return AtmModel(
-      // Cho phép null an toàn tuyệt đối
       tenTaiKhoan: json['tenTaiKhoan']?.toString(),
       soTaiKhoan: json['soTaiKhoan']?.toString(),
       maBank: json['maBank']?.toString(),
@@ -219,51 +388,64 @@ class AtmModel {
 
 ---
 
-## PHẦN 3: SỬA HÀM GỌI API LOGIN TRONG APP
+### BƯỚC 3: Sửa Hàm Gọi API Đăng Nhập Trong App
 
-Trong file xử lý Login của bạn (ví dụ: `auth_service.dart` hoặc `login_controller.dart`):
+* 📂 **Vị trí file:** Mở file bạn đang gọi API Login trong App (ví dụ: `lib/services/auth_service.dart` hoặc `lib/controllers/login_controller.dart`).
+* 🎯 **Thao tác:** Thay thế hàm `login` cũ của bạn bằng đoạn code chuẩn sau:
 
 ```dart
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'user_model.dart';
+import '../core/api_logger.dart'; // File vừa tạo ở Bước 1
+import '../models/user_model.dart'; // File vừa sửa ở Bước 2
+
+// Khởi tạo LoggingClient với appId của Fizahub
+final http.Client apiClient = LoggingClient(
+  http.Client(),
+  appId: 'vn.fizahub.app', // Tự động đẩy log về Web Flow API cho bạn
+);
 
 Future<UserModel?> login({
   required String phone,
   required String password,
-  required http.Client client,
 }) async {
   try {
-    final url = Uri.parse('https://fizahub.vn/api/users/login'); // Thay đúng URL login của bạn
+    final url = Uri.parse('https://fizahub.vn/api/users/login'); // Đúng URL login của bạn
 
-    final response = await client.post(
+    final response = await apiClient.post(
       url,
-      // ⚠️ Lưu ý: Nếu server đọc $_POST, dùng body dạng Map thông thường:
+      // Lưu ý: Nếu server đọc $_POST (form-data), dùng Map thông thường:
       body: {
         'dienThoai': phone,
         'matKhau': password,
       },
-      // Nếu server đọc JSON raw thì mới dùng jsonEncode:
+      // Nếu server đọc JSON thô thì mới dùng dòng dưới:
       // headers: {'Content-Type': 'application/json'},
       // body: jsonEncode({'dienThoai': phone, 'matKhau': password}),
     );
 
     print('👉 HTTP Status: ${response.statusCode}');
-    print('👉 Response Body: ${response.body}');
 
     if (response.statusCode == 200) {
       final Map<String, dynamic> jsonResponse = jsonDecode(response.body);
 
-      // Kiểm tra status từ backend
+      // Kiểm tra thành công
       if (jsonResponse['status'] == 'success' || jsonResponse['code'] == 200) {
-        // ⚠️ QUAN TRỌNG NHẤT: Phải lấy từ field ['data']
+        // ⚠️ ĐIỂM QUAN TRỌNG NHẤT: Dữ liệu user nằm trong trường 'data'
         final userDataMap = jsonResponse['data'] as Map<String, dynamic>;
         final user = UserModel.fromJson(userDataMap);
 
         print('✅ Đăng nhập thành công: ${user.ten} (ID: ${user.id})');
+
+        // Ghi nhận sự kiện đăng nhập thành công vào Analytics
+        AppTelemetry.logEvent('login_success', userId: user.id, parameters: {
+          'phone': phone,
+          'user_name': user.ten,
+        });
+
         return user;
       } else {
-        print('❌ Lỗi từ server: ${jsonResponse['message']}');
+        print('❌ Server từ chối: ${jsonResponse['message']}');
         return null;
       }
     } else {
@@ -272,7 +454,12 @@ Future<UserModel?> login({
     }
   } catch (e, stackTrace) {
     print('🔥 Exception khi login: $e');
-    print('📍 StackTrace: $stackTrace');
+    // Tự động đẩy lỗi về tab Crashlytics trên Web để bạn xem
+    AppTelemetry.recordCrash(
+      exception: e,
+      stack: stackTrace,
+      isFatal: false,
+    );
     return null;
   }
 }
@@ -280,132 +467,42 @@ Future<UserModel?> login({
 
 ---
 
-## PHẦN 4: TÍCH HỢP FLOW API TELEMETRY (ĐÃ CẤU HÌNH SẴN `vn.fizahub.app`)
+### BƯỚC 4: Bật Tự Động Bắt Sập App (Crashlytics) Trong `main.dart`
 
-Hệ thống Flow API trên Cloudflare của bạn đã được cấu hình sẵn:
-* **Tài khoản**: Phạm Minh Hiếu
-* **Mục tiêu**: Fizahub Mobile App
-* **App ID**: `vn.fizahub.app`
-
-### Cách gắn vào App Fizahub:
-
-1. Copy file `public/flutter/api_logger.dart` từ project `flow-api` sang `lib/core/api_logger.dart` của app Fizahub.
-2. Khởi tạo `LoggingClient` với `appId: 'vn.fizahub.app'`:
+* 📂 **Vị trí file:** Mở file `lib/main.dart`.
+* 🎯 **Thao tác:** 
+  1. Thêm import: `import 'core/api_logger.dart';` ở đầu file `main.dart`.
+  2. Tại hàm `void main() async`, thêm 3 hook bắt lỗi ngay trước dòng `runApp(...)`.
 
 ```dart
-import 'package:http/http.dart' as http;
-import 'core/api_logger.dart';
-
-// Khởi tạo client dùng chung cho toàn bộ app
-final http.Client apiClient = LoggingClient(
-  http.Client(),
-  appId: 'vn.fizahub.app', // 👈 Tự động map về tài khoản Phạm Minh Hiếu
-);
-
-// Khi gọi API đăng nhập:
-final user = await login(
-  phone: '0394264400',
-  password: '***',
-  client: apiClient, // 👈 Truyền client này vào
-);
-```
-
-### Kết quả trên Dashboard:
-Toàn bộ log gọi API login, mã 200 OK, thời gian phản hồi (ms) và dữ liệu sẽ lập tức xuất hiện theo thời gian thực tại:
-👉 **https://flow-api.hieupham101097.workers.dev/admin/dashboard** (mục theo dõi: `Fizahub Mobile App`).
-
----
-
-## PHẦN 5: CƠ CHẾ LƯU THEO APPLICATION ID & TỰ ĐỘNG HÓA KHI CÓ NHIỀU APP
-
-### 1. Cơ chế lưu của Flow API:
-* Khi app gửi log lên Flow API, trường `appId` (ví dụ: `vn.fizahub.app`) sẽ được lưu vào cột **`app_identifier`** trong database.
-* Flow API tự động so khớp `app_identifier` với bảng **Jobs** để phân loại log về đúng User và đúng App/Web đó.
-* Log của các app khác nhau hoàn toàn độc lập, không bị lẫn lộn dữ liệu.
-
-### 2. Tự động lấy `applicationId` trong App (Không cần gõ tay cứng chuỗi):
-Để code dùng chung cho nhiều app mà không sợ gõ nhầm ID, bạn dùng package `package_info_plus`:
-
-1. Thêm vào `pubspec.yaml` của App:
-```yaml
-dependencies:
-  package_info_plus: ^8.0.0
-```
-
-2. Tự động đọc Package Name / Application ID từ hệ điều hành (Android `build.gradle` / iOS `Bundle ID`):
-```dart
-import 'package:package_info_plus/package_info_plus.dart';
-import 'package:http/http.dart' as http;
-import 'core/api_logger.dart';
-
-// Hàm khởi tạo Logging Client tự động nhận diện App ID
-Future<http.Client> createAutoMonitoredClient() async {
-  final packageInfo = await PackageInfo.fromPlatform();
-  
-  // Tự động lấy "vn.fizahub.app" (hoặc bất kỳ applicationId nào của app hiện tại)
-  final String autoAppId = packageInfo.packageName; 
-
-  return LoggingClient(
-    http.Client(),
-    appId: autoAppId,
-  );
-}
-```
-
-### 3. Quy trình khi bạn tạo thêm App thứ 2, thứ 3...:
-* **Bên App mới (ví dụ App Tài Xế / Shop)**: Chỉ cần copy nguyên đoạn code trên (nó sẽ tự đọc ra `vn.fizahub.driver` hoặc `vn.fizahub.shop`).
-* **Bên Web Flow API**: 
-  1. Vào [https://flow-api.hieupham101097.workers.dev/admin/users](https://flow-api.hieupham101097.workers.dev/admin/users)
-  2. Bấm **"+ Thêm Người dùng & Job"**
-  3. Điền mã App ID là `vn.fizahub.driver`
-* **Xong!** Bạn không cần sửa thêm 1 dòng code nào ở Backend Flow API.
-
----
-
-## PHẦN 6: THEO DÕI FIREBASE CRASHLYTICS & FIREBASE ANALYTICS TRÊN WEB FLOW API
-
-Hệ thống Flow API hiện đã hỗ trợ **3 chế độ giám sát thời gian thực**:
-1. 📡 **API Logs**: Theo dõi cuộc gọi HTTP (Status 200, 4xx, 5xx, latency, request/response payload).
-2. 💥 **Crashlytics**: Bắt các lỗi sập app (Fatal crash), ngoại lệ (Non-fatal exceptions), dòng lệnh lỗi (Stack Trace) và cấu hình thiết bị.
-3. 📈 **Analytics & Sự kiện**: Ghi nhận hành vi người dùng (click, login, submit form, xem màn hình) kèm tham số chi tiết.
-
-### 1. Cấu hình Crashlytics trong App Flutter (`main.dart`):
-
-Trong file `lib/main.dart` của app Fizahub, thêm đoạn code sau:
-
-```dart
+// lib/main.dart
 import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'core/api_logger.dart'; // File vừa copy ở trên
+import 'core/api_logger.dart'; // 👈 Import file Bước 1
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Khởi tạo Telemetry cho Fizahub
+  // 1. Khởi tạo Telemetry cho Fizahub
   AppTelemetry.initialize(appId: 'vn.fizahub.app');
 
-  // 1. Tự động bắt mọi lỗi Flutter Framework / Render
+  // 2. Tự động bắt mọi lỗi Flutter Render / Widget
   FlutterError.onError = (FlutterErrorDetails details) {
     AppTelemetry.recordCrash(
       exception: details.exception,
       stack: details.stack,
-      isFatal: true, // Đánh dấu là lỗi Fatal
-      deviceInfo: {
-        'os': 'Android/iOS',
-        'app_version': '1.0.0',
-      },
+      isFatal: true,
+      deviceInfo: {'app': 'vn.fizahub.app', 'type': 'flutter_error'},
     );
-
-    // Nếu app có dùng Firebase Crashlytics, gọi thêm:
-    // FirebaseCrashlytics.instance.recordFlutterFatalError(details);
   };
 
-  // 2. Tự động bắt mọi lỗi Bất đồng bộ (Uncaught Async Errors)
+  // 3. Tự động bắt mọi lỗi Bất đồng bộ (Async Error)
   PlatformDispatcher.instance.onError = (error, stack) {
     AppTelemetry.recordCrash(
       exception: error,
       stack: stack,
       isFatal: true,
+      deviceInfo: {'app': 'vn.fizahub.app', 'type': 'async_error'},
     );
     return true;
   };
@@ -414,54 +511,142 @@ void main() async {
 }
 ```
 
-#### Khi có try/catch (Lỗi Non-Fatal không làm văng app):
+> 🎯 **Kết quả:** Từ bây giờ, bất kỳ khi nào app bị văng hay gặp exception, toàn bộ **Stack Trace** (dòng code bị lỗi) sẽ lập tức xuất hiện tại tab **💥 Crashlytics** trên Web:
+> 👉 `https://flow-api.hieupham101097.workers.dev/admin/dashboard`
+
+---
+
+### BƯỚC 5: Cấu Hình Màn Hình WebView Mượt 60 FPS (Không Giựt Lag)
+
+Nếu trong App Fizahub bạn có mở trang Web Dashboard hoặc bất kỳ trang Web nào qua WebView:
+
+#### 1. Bật Tăng Tốc Phần Cứng trong Android (Bắt buộc):
+Mở file `android/app/src/main/AndroidManifest.xml`, thêm `android:hardwareAccelerated="true"` vào thẻ `<application>` và `<activity>`:
+```xml
+<application
+    android:label="Fizahub"
+    android:hardwareAccelerated="true"> <!-- 👈 Thêm dòng này -->
+    
+    <activity
+        android:name=".MainActivity"
+        android:hardwareAccelerated="true" <!-- 👈 Thêm dòng này -->
+        ...>
+```
+
+#### 2. Tạo File Màn Hình WebView Mượt Mà 60 FPS:
+* 📂 Tạo file: `lib/screens/monitor_webview_screen.dart`
+* 🎯 Dán nguyên đoạn code hoàn chỉnh bên dưới:
+
 ```dart
-try {
-  // Thực hiện tác vụ có thể bị lỗi (parse data, tính toán,...)
-} catch (e, stack) {
-  AppTelemetry.recordCrash(
-    exception: e,
-    stack: stack,
-    isFatal: false, // Không sập app, chỉ cảnh báo ngoại lệ
-  );
+// lib/screens/monitor_webview_screen.dart
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
+import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
+
+class MonitorWebViewScreen extends StatefulWidget {
+  final String url;
+  final String title;
+
+  const MonitorWebViewScreen({
+    super.key,
+    this.url = 'https://flow-api.hieupham101097.workers.dev/admin/dashboard',
+    this.title = 'Giám sát Telemetry',
+  });
+
+  @override
+  State<MonitorWebViewScreen> createState() => _MonitorWebViewScreenState();
+}
+
+class _MonitorWebViewScreenState extends State<MonitorWebViewScreen> {
+  late final WebViewController _controller;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+
+    final WebViewController controller = WebViewController();
+
+    controller
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(const Color(0xFF070C12)) // Màu nền tối tránh chớp sáng
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onPageFinished: (_) {
+            if (mounted) setState(() => _isLoading = false);
+          },
+        ),
+      )
+      ..loadRequest(Uri.parse(widget.url));
+
+    // Tối ưu riêng cho thiết bị Android
+    if (controller.platform is AndroidWebViewController) {
+      final androidController = controller.platform as AndroidWebViewController;
+      androidController.setMediaPlaybackRequiresUserGesture(false);
+    }
+
+    _controller = controller;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF070C12),
+      appBar: AppBar(
+        title: Text(widget.title, style: const TextStyle(fontSize: 16, color: Colors.white)),
+        backgroundColor: const Color(0xFF0D151F),
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: () => _controller.reload(),
+            tooltip: 'Tải lại trang',
+          ),
+        ],
+      ),
+      body: Stack(
+        children: [
+          WebViewWidget(
+            controller: _controller,
+            // ⚠️ MẤU CHỐT 60 FPS: EagerGestureRecognizer giúp WebView chiếm trọn cử chỉ vuốt,
+            // triệt tiêu xung đột với cuộn của Flutter, giúp cuộn bảng mượt như native.
+            gestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
+              Factory<OneSequenceGestureRecognizer>(
+                () => EagerGestureRecognizer(),
+              ),
+            },
+          ),
+          if (_isLoading)
+            const Center(
+              child: CircularProgressIndicator(color: Color(0xFF7D9CFF)),
+            ),
+        ],
+      ),
+    );
+  }
 }
 ```
 
----
-
-### 2. Cấu hình Firebase Analytics & Screen Tracking:
-
-Khi người dùng thực hiện một hành động hoặc chuyển màn hình:
-
+#### 3. Cách mở màn hình này từ bất kỳ đâu trong app:
 ```dart
-// 1. Ghi nhận sự kiện người dùng (Custom Event)
-AppTelemetry.logEvent(
-  'login_success',
-  parameters: {
-    'phone': '0394264400',
-    'role': 'user',
-    'method': 'password',
-  },
-  userId: '266', // ID người dùng
-);
-
-// 2. Ghi nhận khi xem màn hình (Screen View)
-AppTelemetry.logScreenView(
-  'HomeScreen',
-  parameters: {
-    'tab': 'dashboard',
-  },
-  userId: '266',
+Navigator.push(
+  context,
+  MaterialPageRoute(
+    builder: (context) => const MonitorWebViewScreen(),
+  ),
 );
 ```
 
 ---
 
-### 3. Xem dữ liệu trên Web Dashboard:
+## 🎯 KIỂM TRA KẾT QUẢ TRÊN WEB DASHBOARD
 
-1. Mở trang: **https://flow-api.hieupham101097.workers.dev/admin/dashboard**
-2. Nhấn vào thanh chọn chế độ ở đầu trang:
-   * Chọn **📡 API Logs**: Xem các cuộc gọi API.
-   * Chọn **💥 Crashlytics**: Xem danh sách các lần sập app, bấm **"Stack Trace"** để copy toàn bộ dòng lệnh báo lỗi mà không cần vào Firebase Console.
-   * Chọn **📈 Analytics & Sự kiện**: Xem danh sách sự kiện, người dùng nào thực hiện, tham số chi tiết và luồng màn hình.
-
+Sau khi hoàn thành các bước trên và chạy app:
+1. Mở trình duyệt vào: 👉 **https://flow-api.hieupham101097.workers.dev/admin/dashboard**
+2. Quan sát 3 mục:
+   * **📡 API Logs**: Thấy cuộc gọi login mã **200 OK**, thời gian chạy (ms) và dữ liệu trả về.
+   * **💥 Crashlytics**: Nếu app gặp lỗi, bạn bấm vào nút **"Stack Trace"** để xem ngay lỗi ở file nào, dòng bao nhiêu.
+   * **📈 Analytics & Sự kiện**: Thấy sự kiện `login_success` cùng thông tin người dùng vừa đăng nhập.
