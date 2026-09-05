@@ -265,3 +265,114 @@ class ApiLogger {
     }
   }
 }
+
+/// Telemetry helper for Firebase Crashlytics & Analytics dual-reporting
+class AppTelemetry {
+  static String _defaultAppId = 'default_app';
+  static const String defaultEndpoint = String.fromEnvironment(
+    'API_MONITOR_URL',
+    defaultValue: 'https://flow-api.hieupham101097.workers.dev',
+  );
+
+  /// Khởi tạo mã App ID mặc định cho toàn bộ telemetry
+  static void initialize({
+    required String appId,
+  }) {
+    _defaultAppId = appId;
+  }
+
+  /// Ghi nhận sự cố Crashlytics (Fatal Crash hoặc Non-fatal Exception)
+  static void recordCrash({
+    required dynamic exception,
+    dynamic stack,
+    bool isFatal = false,
+    Map<String, dynamic>? deviceInfo,
+    Map<String, dynamic>? customAttributes,
+    String? appId,
+    String? serverUrl,
+  }) {
+    final targetUrl = serverUrl ?? '$defaultEndpoint/crashes';
+    final effectiveAppId = appId ?? _defaultAppId;
+
+    final payload = {
+      'app_id': effectiveAppId,
+      'error_message': exception.toString(),
+      'stack_trace': stack?.toString(),
+      'is_fatal': isFatal,
+      'device_info': deviceInfo,
+      'custom_attributes': customAttributes,
+    };
+
+    http
+        .post(
+          Uri.parse(targetUrl),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(payload),
+        )
+        .catchError((_) => http.Response('', 500));
+  }
+
+  /// Ghi nhận Sự kiện Analytics (Event tracking song song với Firebase Analytics)
+  static void logEvent(
+    String name, {
+    Map<String, dynamic>? parameters,
+    String? screenName,
+    String? userId,
+    Map<String, dynamic>? deviceInfo,
+    String? appId,
+    String? serverUrl,
+  }) {
+    final targetUrl = serverUrl ?? '$defaultEndpoint/events';
+    final effectiveAppId = appId ?? _defaultAppId;
+
+    final payload = {
+      'app_id': effectiveAppId,
+      'event_name': name,
+      'event_type': 'event',
+      'screen_name': screenName,
+      'user_id': userId,
+      'parameters': parameters,
+      'device_info': deviceInfo,
+    };
+
+    http
+        .post(
+          Uri.parse(targetUrl),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(payload),
+        )
+        .catchError((_) => http.Response('', 500));
+  }
+
+  /// Ghi nhận chuyển màn hình (Screen View)
+  static void logScreenView(
+    String screenName, {
+    Map<String, dynamic>? parameters,
+    String? userId,
+    Map<String, dynamic>? deviceInfo,
+    String? appId,
+    String? serverUrl,
+  }) {
+    final targetUrl = serverUrl ?? '$defaultEndpoint/events';
+    final effectiveAppId = appId ?? _defaultAppId;
+
+    final payload = {
+      'app_id': effectiveAppId,
+      'event_name': 'screen_view',
+      'event_type': 'screen_view',
+      'screen_name': screenName,
+      'user_id': userId,
+      'parameters': parameters,
+      'device_info': deviceInfo,
+    };
+
+    http
+        .post(
+          Uri.parse(targetUrl),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(payload),
+        )
+        .catchError((_) => http.Response('', 500));
+  }
+}
+

@@ -47,13 +47,36 @@ async function ensureSchema(db) {
       )
     `).run();
 
-    // 4. Bổ sung các cột mới cho api_logs nếu chạy trên DB cũ
-    try {
-      await db.prepare('ALTER TABLE api_logs ADD COLUMN job_id INTEGER').run();
-    } catch (_) {}
-    try {
-      await db.prepare('ALTER TABLE api_logs ADD COLUMN app_identifier TEXT').run();
-    } catch (_) {}
+    // 5. Tạo bảng app_crashes nếu chưa có
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS app_crashes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+        app_identifier TEXT,
+        error_message TEXT NOT NULL,
+        stack_trace TEXT,
+        is_fatal INTEGER DEFAULT 0,
+        device_info TEXT,
+        custom_attributes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `).run();
+
+    // 6. Tạo bảng app_events nếu chưa có
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS app_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+        app_identifier TEXT,
+        event_name TEXT NOT NULL,
+        event_type TEXT DEFAULT 'event',
+        screen_name TEXT,
+        user_id TEXT,
+        parameters TEXT,
+        device_info TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `).run();
 
     tablesInitialized = true;
   } catch (err) {
@@ -88,7 +111,13 @@ export default {
     const path = url.pathname.replace(/\/+$/, '').replace(/^\/+/, '/');
 
     // Tự động đảm bảo schema DB sẵn sàng cho các API
-    if (path.startsWith('/logs') || path.startsWith('/users') || path.startsWith('/jobs')) {
+    if (
+      path.startsWith('/logs') || 
+      path.startsWith('/users') || 
+      path.startsWith('/jobs') ||
+      path.startsWith('/crashes') ||
+      path.startsWith('/events')
+    ) {
       await ensureSchema(env.DB);
     }
 
@@ -385,6 +414,241 @@ export default {
       }
     }
 
+    // ==========================================
+    // 4. API CRASHES: /crashes (Crashlytics)
+    // ==========================================
+    if (path === '/crashes' && request.method === 'GET') {
+      try {
+        const jobId = url.searchParams.get('job_id');
+        const userId = url.searchParams.get('user_id');
+        const appIdentifier = url.searchParams.get('app_identifier') || url.searchParams.get('app_id');
+        const isFatal = url.searchParams.get('is_fatal');
+        const limit = Math.min(Number(url.searchParams.get('limit')) || 100, 500);
+
+        let query = `
+          SELECT 
+            c.*,
+            j.name as job_name,
+            j.type as job_type,
+            u.id as user_id,
+            u.name as user_name
+          FROM app_crashes c
+          LEFT JOIN jobs j ON (c.job_id IS NOT NULL AND c.job_id = j.id) 
+                           OR (c.app_identifier IS NOT NULL AND c.app_identifier = j.app_identifier)
+          LEFT JOIN users u ON j.user_id = u.id
+          WHERE 1=1
+        `;
+        const params = [];
+
+        if (jobId) {
+          query += ' AND (c.job_id = ? OR j.id = ?)';
+          params.push(Number(jobId), Number(jobId));
+        }
+        if (userId) {
+          query += ' AND (u.id = ?)';
+          params.push(Number(userId));
+        }
+        if (appIdentifier) {
+          query += ' AND (c.app_identifier = ? OR j.app_identifier = ?)';
+          params.push(appIdentifier, appIdentifier);
+        }
+        if (isFatal !== null && isFatal !== undefined && isFatal !== '') {
+          query += ' AND c.is_fatal = ?';
+          params.push(Number(isFatal));
+        }
+
+        query += ' ORDER BY c.created_at DESC LIMIT ?';
+        params.push(limit);
+
+        const stmt = env.DB.prepare(query);
+        const { results } = await stmt.bind(...params).all();
+        return jsonResponse(results);
+      } catch (e) {
+        try {
+          const { results } = await env.DB.prepare(
+            'SELECT * FROM app_crashes ORDER BY created_at DESC LIMIT 100'
+          ).all();
+          return jsonResponse(results);
+        } catch (err) {
+          return jsonResponse({ error: e.message }, 500);
+        }
+      }
+    }
+
+    if (path === '/crashes' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        const {
+          error_message,
+          stack_trace,
+          is_fatal,
+          device_info,
+          custom_attributes,
+          app_id,
+          app_identifier,
+          job_id,
+        } = body;
+
+        if (!error_message) {
+          return jsonResponse({ error: 'error_message is required' }, 400);
+        }
+
+        const effectiveAppIdentifier = (app_identifier || app_id || '').trim();
+        let effectiveJobId = job_id ? Number(job_id) : null;
+
+        if (!effectiveJobId && effectiveAppIdentifier) {
+          try {
+            const matchedJob = await env.DB.prepare(
+              'SELECT id FROM jobs WHERE app_identifier = ?'
+            ).bind(effectiveAppIdentifier).first();
+            if (matchedJob) {
+              effectiveJobId = matchedJob.id;
+            }
+          } catch (_) {}
+        }
+
+        const res = await env.DB.prepare(`
+          INSERT INTO app_crashes (
+            job_id, app_identifier, error_message, stack_trace,
+            is_fatal, device_info, custom_attributes
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          effectiveJobId,
+          effectiveAppIdentifier || null,
+          String(error_message),
+          stack_trace ? String(stack_trace) : null,
+          is_fatal ? 1 : 0,
+          formatPayload(device_info),
+          formatPayload(custom_attributes)
+        ).run();
+
+        return jsonResponse({ success: true, id: res.meta?.last_row_id, job_id: effectiveJobId });
+      } catch (e) {
+        return jsonResponse({ error: e.message }, 500);
+      }
+    }
+
+    // ==========================================
+    // 5. API EVENTS (ANALYTICS): /events
+    // ==========================================
+    if (path === '/events' && request.method === 'GET') {
+      try {
+        const jobId = url.searchParams.get('job_id');
+        const userId = url.searchParams.get('user_id');
+        const appIdentifier = url.searchParams.get('app_identifier') || url.searchParams.get('app_id');
+        const eventName = url.searchParams.get('event_name');
+        const eventType = url.searchParams.get('event_type');
+        const limit = Math.min(Number(url.searchParams.get('limit')) || 150, 500);
+
+        let query = `
+          SELECT 
+            e.*,
+            j.name as job_name,
+            j.type as job_type,
+            u.id as user_id,
+            u.name as user_name
+          FROM app_events e
+          LEFT JOIN jobs j ON (e.job_id IS NOT NULL AND e.job_id = j.id) 
+                           OR (e.app_identifier IS NOT NULL AND e.app_identifier = j.app_identifier)
+          LEFT JOIN users u ON j.user_id = u.id
+          WHERE 1=1
+        `;
+        const params = [];
+
+        if (jobId) {
+          query += ' AND (e.job_id = ? OR j.id = ?)';
+          params.push(Number(jobId), Number(jobId));
+        }
+        if (userId) {
+          query += ' AND (u.id = ?)';
+          params.push(Number(userId));
+        }
+        if (appIdentifier) {
+          query += ' AND (e.app_identifier = ? OR j.app_identifier = ?)';
+          params.push(appIdentifier, appIdentifier);
+        }
+        if (eventName) {
+          query += ' AND e.event_name = ?';
+          params.push(eventName);
+        }
+        if (eventType) {
+          query += ' AND e.event_type = ?';
+          params.push(eventType);
+        }
+
+        query += ' ORDER BY e.created_at DESC LIMIT ?';
+        params.push(limit);
+
+        const stmt = env.DB.prepare(query);
+        const { results } = await stmt.bind(...params).all();
+        return jsonResponse(results);
+      } catch (e) {
+        try {
+          const { results } = await env.DB.prepare(
+            'SELECT * FROM app_events ORDER BY created_at DESC LIMIT 100'
+          ).all();
+          return jsonResponse(results);
+        } catch (err) {
+          return jsonResponse({ error: e.message }, 500);
+        }
+      }
+    }
+
+    if (path === '/events' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        const {
+          event_name,
+          event_type,
+          screen_name,
+          user_id,
+          parameters,
+          device_info,
+          app_id,
+          app_identifier,
+          job_id,
+        } = body;
+
+        if (!event_name) {
+          return jsonResponse({ error: 'event_name is required' }, 400);
+        }
+
+        const effectiveAppIdentifier = (app_identifier || app_id || '').trim();
+        let effectiveJobId = job_id ? Number(job_id) : null;
+
+        if (!effectiveJobId && effectiveAppIdentifier) {
+          try {
+            const matchedJob = await env.DB.prepare(
+              'SELECT id FROM jobs WHERE app_identifier = ?'
+            ).bind(effectiveAppIdentifier).first();
+            if (matchedJob) {
+              effectiveJobId = matchedJob.id;
+            }
+          } catch (_) {}
+        }
+
+        const res = await env.DB.prepare(`
+          INSERT INTO app_events (
+            job_id, app_identifier, event_name, event_type,
+            screen_name, user_id, parameters, device_info
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          effectiveJobId,
+          effectiveAppIdentifier || null,
+          String(event_name).trim(),
+          event_type || 'event',
+          screen_name || null,
+          user_id || null,
+          formatPayload(parameters),
+          formatPayload(device_info)
+        ).run();
+
+        return jsonResponse({ success: true, id: res.meta?.last_row_id, job_id: effectiveJobId });
+      } catch (e) {
+        return jsonResponse({ error: e.message }, 500);
+      }
+    }
+
     // Serve the Vite build for the website and let Cloudflare's SPA fallback
     // return index.html for client-side routes such as /admin/dashboard or /admin/users.
     return env.ASSETS.fetch(request);
@@ -392,13 +656,19 @@ export default {
 
   async scheduled(event, env, ctx) {
     try {
-      // Delete logs older than 2 days
+      // Xóa log và telemetry cũ hơn 2 ngày
       await env.DB.prepare(
         "DELETE FROM api_logs WHERE created_at < datetime('now', '-2 days')"
       ).run();
-      console.log('Successfully deleted old logs');
+      await env.DB.prepare(
+        "DELETE FROM app_crashes WHERE created_at < datetime('now', '-2 days')"
+      ).run();
+      await env.DB.prepare(
+        "DELETE FROM app_events WHERE created_at < datetime('now', '-2 days')"
+      ).run();
+      console.log('Successfully deleted old logs, crashes, and analytics events');
     } catch (e) {
-      console.error('Failed to delete old logs:', e.message);
+      console.error('Failed to delete old telemetry:', e.message);
     }
   },
 };

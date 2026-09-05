@@ -20,7 +20,7 @@ function AdminLayout() {
               className={({ isActive }) => `nav-tab-link ${isActive ? 'active' : ''}`}
             >
               <span>📊</span>
-              <span>Giám sát Logs</span>
+              <span>Giám sát & Telemetry</span>
             </NavLink>
             <NavLink
               to="/admin/users"

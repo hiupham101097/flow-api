@@ -359,3 +359,109 @@ Future<http.Client> createAutoMonitoredClient() async {
   2. Bấm **"+ Thêm Người dùng & Job"**
   3. Điền mã App ID là `vn.fizahub.driver`
 * **Xong!** Bạn không cần sửa thêm 1 dòng code nào ở Backend Flow API.
+
+---
+
+## PHẦN 6: THEO DÕI FIREBASE CRASHLYTICS & FIREBASE ANALYTICS TRÊN WEB FLOW API
+
+Hệ thống Flow API hiện đã hỗ trợ **3 chế độ giám sát thời gian thực**:
+1. 📡 **API Logs**: Theo dõi cuộc gọi HTTP (Status 200, 4xx, 5xx, latency, request/response payload).
+2. 💥 **Crashlytics**: Bắt các lỗi sập app (Fatal crash), ngoại lệ (Non-fatal exceptions), dòng lệnh lỗi (Stack Trace) và cấu hình thiết bị.
+3. 📈 **Analytics & Sự kiện**: Ghi nhận hành vi người dùng (click, login, submit form, xem màn hình) kèm tham số chi tiết.
+
+### 1. Cấu hình Crashlytics trong App Flutter (`main.dart`):
+
+Trong file `lib/main.dart` của app Fizahub, thêm đoạn code sau:
+
+```dart
+import 'dart:ui';
+import 'package:flutter/material.dart';
+import 'core/api_logger.dart'; // File vừa copy ở trên
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Khởi tạo Telemetry cho Fizahub
+  AppTelemetry.initialize(appId: 'vn.fizahub.app');
+
+  // 1. Tự động bắt mọi lỗi Flutter Framework / Render
+  FlutterError.onError = (FlutterErrorDetails details) {
+    AppTelemetry.recordCrash(
+      exception: details.exception,
+      stack: details.stack,
+      isFatal: true, // Đánh dấu là lỗi Fatal
+      deviceInfo: {
+        'os': 'Android/iOS',
+        'app_version': '1.0.0',
+      },
+    );
+
+    // Nếu app có dùng Firebase Crashlytics, gọi thêm:
+    // FirebaseCrashlytics.instance.recordFlutterFatalError(details);
+  };
+
+  // 2. Tự động bắt mọi lỗi Bất đồng bộ (Uncaught Async Errors)
+  PlatformDispatcher.instance.onError = (error, stack) {
+    AppTelemetry.recordCrash(
+      exception: error,
+      stack: stack,
+      isFatal: true,
+    );
+    return true;
+  };
+
+  runApp(const MyApp());
+}
+```
+
+#### Khi có try/catch (Lỗi Non-Fatal không làm văng app):
+```dart
+try {
+  // Thực hiện tác vụ có thể bị lỗi (parse data, tính toán,...)
+} catch (e, stack) {
+  AppTelemetry.recordCrash(
+    exception: e,
+    stack: stack,
+    isFatal: false, // Không sập app, chỉ cảnh báo ngoại lệ
+  );
+}
+```
+
+---
+
+### 2. Cấu hình Firebase Analytics & Screen Tracking:
+
+Khi người dùng thực hiện một hành động hoặc chuyển màn hình:
+
+```dart
+// 1. Ghi nhận sự kiện người dùng (Custom Event)
+AppTelemetry.logEvent(
+  'login_success',
+  parameters: {
+    'phone': '0394264400',
+    'role': 'user',
+    'method': 'password',
+  },
+  userId: '266', // ID người dùng
+);
+
+// 2. Ghi nhận khi xem màn hình (Screen View)
+AppTelemetry.logScreenView(
+  'HomeScreen',
+  parameters: {
+    'tab': 'dashboard',
+  },
+  userId: '266',
+);
+```
+
+---
+
+### 3. Xem dữ liệu trên Web Dashboard:
+
+1. Mở trang: **https://flow-api.hieupham101097.workers.dev/admin/dashboard**
+2. Nhấn vào thanh chọn chế độ ở đầu trang:
+   * Chọn **📡 API Logs**: Xem các cuộc gọi API.
+   * Chọn **💥 Crashlytics**: Xem danh sách các lần sập app, bấm **"Stack Trace"** để copy toàn bộ dòng lệnh báo lỗi mà không cần vào Firebase Console.
+   * Chọn **📈 Analytics & Sự kiện**: Xem danh sách sự kiện, người dùng nào thực hiện, tham số chi tiết và luồng màn hình.
+
