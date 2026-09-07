@@ -9,13 +9,14 @@ const WORKER_URL = 'https://flow-api.hieupham101097.workers.dev/logs'; // Replac
 /**
  * Utility to log API telemetry to the monitor in the background.
  */
-const sendTelemetry = async (logData, appId) => {
+const sendTelemetry = async (logData, appId, deviceName) => {
   try {
+    const resolvedDevice = deviceName || (typeof navigator !== 'undefined' ? (navigator.userAgent?.includes('Chrome') ? 'Google Chrome' : navigator.userAgent?.includes('Safari') ? 'Apple Safari' : navigator.userAgent?.includes('Firefox') ? 'Mozilla Firefox' : 'Trình duyệt Web') : 'Web Client');
     // Send in background, don't await/block the main thread
     fetch(WORKER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ app_id: appId, ...logData }),
+      body: JSON.stringify({ app_id: appId, device_name: resolvedDevice, ...logData }),
       // keepalive ensures the request finishes even if the page is unloading
       keepalive: true, 
     }).catch(console.error); 

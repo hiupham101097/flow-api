@@ -32,17 +32,46 @@
 // lib/core/api_logger.dart
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'package:http/http.dart' as http;
 
 class AppTelemetry {
   static String? _appId;
+  static String? _deviceName;
   static String _serverUrl = 'https://flow-api.hieupham101097.workers.dev';
 
-  static void initialize({required String appId, String? serverUrl}) {
+  /// Khởi tạo telemetry với appId và tên thiết bị (ví dụ: 'iPhone 15 Pro', 'Samsung S24'...)
+  /// Nếu để trống deviceName, hệ thống sẽ tự động phát hiện hệ điều hành (Android / iOS)
+  static void initialize({
+    required String appId,
+    String? deviceName,
+    String? serverUrl,
+  }) {
     _appId = appId;
+    if (deviceName != null && deviceName.isNotEmpty) {
+      _deviceName = deviceName;
+    }
     if (serverUrl != null && serverUrl.isNotEmpty) {
       _serverUrl = serverUrl;
     }
+  }
+
+  static void setDeviceName(String name) {
+    _deviceName = name;
+  }
+
+  static String get deviceName {
+    if (_deviceName != null && _deviceName!.isNotEmpty) {
+      return _deviceName!;
+    }
+    try {
+      final os = Platform.operatingSystem;
+      if (os.isNotEmpty) {
+        final cap = '${os[0].toUpperCase()}${os.substring(1)}';
+        return '$cap Device';
+      }
+    } catch (_) {}
+    return 'Mobile Device';
   }
 
   static String get appId => _appId ?? 'vn.fizahub.app';
@@ -54,14 +83,21 @@ class AppTelemetry {
     StackTrace? stack,
     bool isFatal = false,
     Map<String, dynamic>? deviceInfo,
+    String? deviceName,
   }) async {
     try {
+      final effectiveDevice = deviceName ?? AppTelemetry.deviceName;
+      final Map<String, dynamic> mergedDevice = Map.from(deviceInfo ?? {});
+      if (!mergedDevice.containsKey('device_name')) {
+        mergedDevice['device_name'] = effectiveDevice;
+      }
+
       final payload = {
         'app_id': appId,
         'error_message': exception.toString(),
         'stack_trace': stack?.toString() ?? '',
         'is_fatal': isFatal ? 1 : 0,
-        'device_info': deviceInfo ?? {},
+        'device_info': mergedDevice,
       };
 
       http.post(
@@ -77,14 +113,23 @@ class AppTelemetry {
     String eventName, {
     Map<String, dynamic>? parameters,
     String? userId,
+    String? deviceName,
+    Map<String, dynamic>? deviceInfo,
   }) async {
     try {
+      final effectiveDevice = deviceName ?? AppTelemetry.deviceName;
+      final Map<String, dynamic> mergedDevice = Map.from(deviceInfo ?? {});
+      if (!mergedDevice.containsKey('device_name')) {
+        mergedDevice['device_name'] = effectiveDevice;
+      }
+
       final payload = {
         'app_id': appId,
         'event_name': eventName,
         'event_type': 'custom',
         'parameters': parameters ?? {},
         'user_id': userId,
+        'device_info': mergedDevice,
       };
 
       http.post(
@@ -100,8 +145,16 @@ class AppTelemetry {
     String screenName, {
     Map<String, dynamic>? parameters,
     String? userId,
+    String? deviceName,
+    Map<String, dynamic>? deviceInfo,
   }) async {
     try {
+      final effectiveDevice = deviceName ?? AppTelemetry.deviceName;
+      final Map<String, dynamic> mergedDevice = Map.from(deviceInfo ?? {});
+      if (!mergedDevice.containsKey('device_name')) {
+        mergedDevice['device_name'] = effectiveDevice;
+      }
+
       final payload = {
         'app_id': appId,
         'event_name': 'screen_view',
@@ -109,6 +162,7 @@ class AppTelemetry {
         'screen_name': screenName,
         'parameters': parameters ?? {},
         'user_id': userId,
+        'device_info': mergedDevice,
       };
 
       http.post(
@@ -125,11 +179,13 @@ class LoggingClient extends http.BaseClient {
   final http.Client _inner;
   final String appId;
   final String serverUrl;
+  final String? deviceName;
 
   LoggingClient(
     this._inner, {
     this.appId = 'vn.fizahub.app',
     this.serverUrl = 'https://flow-api.hieupham101097.workers.dev',
+    this.deviceName,
   });
 
   @override
@@ -143,7 +199,7 @@ class LoggingClient extends http.BaseClient {
       final bytes = await response.stream.toBytes();
       final responseBody = utf8.decode(bytes, allowMalformed: true);
 
-      // Gửi log bất đồng bộ lên Cloudflare, không làm chậm app
+      // Gửi log bất đồng bộ lên Cloudflare kèm tên thiết bị
       _sendLog(
         endpoint: request.url.toString(),
         method: request.method,
@@ -185,6 +241,7 @@ class LoggingClient extends http.BaseClient {
     String? errorMessage,
   }) {
     try {
+      final effectiveDevice = deviceName ?? AppTelemetry.deviceName;
       http.post(
         Uri.parse('$serverUrl/logs'),
         headers: {'Content-Type': 'application/json'},
@@ -196,6 +253,7 @@ class LoggingClient extends http.BaseClient {
           'duration_ms': durationMs,
           'response_payload': responsePayload,
           'error_message': errorMessage,
+          'device_name': effectiveDevice,
         }),
       ).catchError((_) => http.Response('', 500));
     } catch (_) {}
@@ -483,8 +541,11 @@ import 'core/api_logger.dart'; // 👈 Import file Bước 1
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 1. Khởi tạo Telemetry cho Fizahub
-  AppTelemetry.initialize(appId: 'vn.fizahub.app');
+  // 1. Khởi tạo Telemetry cho Fizahub (Hỗ trợ đặt tên thiết bị hoặc để tự động nhận diện theo máy)
+  AppTelemetry.initialize(
+    appId: 'vn.fizahub.app',
+    // deviceName: 'iPhone 15 Pro', // 👈 Tùy chọn: đặt tên máy (ví dụ: 'iPhone 15 Pro', 'Samsung S24'...) để phân biệt khi nhiều máy dùng
+  );
 
   // 2. Tự động bắt mọi lỗi Flutter Render / Widget
   FlutterError.onError = (FlutterErrorDetails details) {

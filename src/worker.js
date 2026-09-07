@@ -299,6 +299,7 @@ export default {
         let query = `
           SELECT 
             l.*,
+            COALESCE(l.device_name, CASE WHEN j.type = 'web' THEN 'Trình duyệt Web' ELSE 'Thiết bị di động' END) as device_name,
             j.name as job_name,
             j.type as job_type,
             u.id as user_id,
@@ -357,7 +358,34 @@ export default {
           app_id,
           app_identifier,
           job_id,
+          device_name,
+          device_info,
         } = body;
+
+        let effectiveDeviceName = (device_name || '').trim();
+        if (!effectiveDeviceName && device_info) {
+          if (typeof device_info === 'object') {
+            effectiveDeviceName = (device_info.device_name || device_info.model || device_info.name || device_info.os || '').trim();
+          } else if (typeof device_info === 'string') {
+            try {
+              const parsed = JSON.parse(device_info);
+              effectiveDeviceName = (parsed.device_name || parsed.model || parsed.name || parsed.os || '').trim();
+            } catch (_) {
+              effectiveDeviceName = device_info.slice(0, 50).trim();
+            }
+          }
+        }
+        if (!effectiveDeviceName) {
+          const ua = request.headers.get('user-agent') || '';
+          if (ua.includes('iPhone')) effectiveDeviceName = 'Apple iPhone';
+          else if (ua.includes('iPad')) effectiveDeviceName = 'Apple iPad';
+          else if (ua.includes('Android')) effectiveDeviceName = 'Thiết bị Android';
+          else if (ua.includes('Windows')) effectiveDeviceName = 'Windows PC';
+          else if (ua.includes('Macintosh')) effectiveDeviceName = 'Apple Mac';
+          else if (ua.includes('Linux')) effectiveDeviceName = 'Linux Client';
+          else if (ua.includes('Dart')) effectiveDeviceName = 'Flutter Mobile';
+          else effectiveDeviceName = 'Thiết bị di động';
+        }
 
         const effectiveAppIdentifier = (app_identifier || app_id || '').trim();
         let effectiveJobId = job_id ? Number(job_id) : null;
@@ -378,8 +406,8 @@ export default {
           await env.DB.prepare(`
             INSERT INTO api_logs (
               job_id, app_identifier, endpoint, method, status_code, 
-              error_message, request_payload, response_payload, duration_ms
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+              error_message, request_payload, response_payload, duration_ms, device_name
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).bind(
             effectiveJobId,
             effectiveAppIdentifier || null,
@@ -389,10 +417,11 @@ export default {
             error_message || null,
             formatPayload(request_payload),
             formatPayload(response_payload),
-            duration_ms || 0
+            duration_ms || 0,
+            effectiveDeviceName || null
           ).run();
         } catch (insertErr) {
-          // Fallback nếu cột job_id / app_identifier chưa có
+          // Fallback nếu cột device_name hoặc job_id / app_identifier gặp sự cố
           await env.DB.prepare(`
             INSERT INTO api_logs (
               endpoint, method, status_code, error_message, request_payload, response_payload, duration_ms

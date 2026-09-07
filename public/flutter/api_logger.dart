@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
@@ -70,7 +71,13 @@ class LoggingClient extends http.BaseClient {
     defaultValue: 'https://flow-api.hieupham101097.workers.dev',
   );
 
-  LoggingClient(this._inner, {this.appId = 'default_app'});
+  final String? deviceName;
+
+  LoggingClient(
+    this._inner, {
+    this.appId = 'default_app',
+    this.deviceName,
+  });
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
@@ -144,6 +151,7 @@ class LoggingClient extends http.BaseClient {
         responsePayload: parsedResponse ?? responseString,
         durationMs: duration,
         appId: appId,
+        deviceName: deviceName,
         serverUrl: '$_apiMonitorUrl/logs',
       );
 
@@ -160,6 +168,7 @@ class LoggingClient extends http.BaseClient {
         responsePayload: null,
         durationMs: duration,
         appId: appId,
+        deviceName: deviceName,
         serverUrl: '$_apiMonitorUrl/logs',
       );
 
@@ -218,6 +227,7 @@ class ApiLogger {
     dynamic responsePayload,
     required int durationMs,
     String appId = 'default_app',
+    String? deviceName,
     String? serverUrl,
   }) {
     // Avoid sending excessively large payloads (> 200 KB)
@@ -225,6 +235,7 @@ class ApiLogger {
     dynamic safeResponse = _sanitizePayload(responsePayload);
 
     final targetUrl = serverUrl ?? '$defaultEndpoint/logs';
+    final effectiveDevice = (deviceName != null && deviceName.isNotEmpty) ? deviceName : AppTelemetry.deviceName;
 
     final payload = {
       'app_id': appId,
@@ -235,6 +246,7 @@ class ApiLogger {
       'request_payload': safeRequest,
       'response_payload': safeResponse,
       'duration_ms': durationMs,
+      if (effectiveDevice.isNotEmpty) 'device_name': effectiveDevice,
     };
 
     http
@@ -269,16 +281,45 @@ class ApiLogger {
 /// Telemetry helper for Firebase Crashlytics & Analytics dual-reporting
 class AppTelemetry {
   static String _defaultAppId = 'default_app';
+  static String? _deviceName;
   static const String defaultEndpoint = String.fromEnvironment(
     'API_MONITOR_URL',
     defaultValue: 'https://flow-api.hieupham101097.workers.dev',
   );
 
-  /// Khởi tạo mã App ID mặc định cho toàn bộ telemetry
+  /// Khởi tạo mã App ID và Tên thiết bị mặc định cho toàn bộ telemetry
   static void initialize({
     required String appId,
+    String? deviceName,
   }) {
     _defaultAppId = appId;
+    if (deviceName != null && deviceName.isNotEmpty) {
+      _deviceName = deviceName;
+    }
+  }
+
+  /// Cập nhật tên thiết bị (ví dụ: 'iPhone 15 Pro', 'Samsung S24', 'Pixel 7'...)
+  static void setDeviceName(String name) {
+    _deviceName = name;
+  }
+
+  /// Lấy tên thiết bị (tự động nhận diện nếu chưa cấu hình thủ công)
+  static String get deviceName {
+    if (_deviceName != null && _deviceName!.isNotEmpty) {
+      return _deviceName!;
+    }
+    return _resolveDeviceName();
+  }
+
+  static String _resolveDeviceName() {
+    try {
+      final os = Platform.operatingSystem;
+      if (os.isNotEmpty) {
+        final cap = '${os[0].toUpperCase()}${os.substring(1)}';
+        return '$cap Device';
+      }
+    } catch (_) {}
+    return 'Mobile Device';
   }
 
   /// Ghi nhận sự cố Crashlytics (Fatal Crash hoặc Non-fatal Exception)
@@ -289,17 +330,24 @@ class AppTelemetry {
     Map<String, dynamic>? deviceInfo,
     Map<String, dynamic>? customAttributes,
     String? appId,
+    String? deviceName,
     String? serverUrl,
   }) {
     final targetUrl = serverUrl ?? '$defaultEndpoint/crashes';
     final effectiveAppId = appId ?? _defaultAppId;
+    final effectiveDevice = deviceName ?? AppTelemetry.deviceName;
+
+    final Map<String, dynamic> mergedDeviceInfo = Map.from(deviceInfo ?? {});
+    if (!mergedDeviceInfo.containsKey('device_name')) {
+      mergedDeviceInfo['device_name'] = effectiveDevice;
+    }
 
     final payload = {
       'app_id': effectiveAppId,
       'error_message': exception.toString(),
       'stack_trace': stack?.toString(),
       'is_fatal': isFatal,
-      'device_info': deviceInfo,
+      'device_info': mergedDeviceInfo,
       'custom_attributes': customAttributes,
     };
 
@@ -319,11 +367,18 @@ class AppTelemetry {
     String? screenName,
     String? userId,
     Map<String, dynamic>? deviceInfo,
+    String? deviceName,
     String? appId,
     String? serverUrl,
   }) {
     final targetUrl = serverUrl ?? '$defaultEndpoint/events';
     final effectiveAppId = appId ?? _defaultAppId;
+    final effectiveDevice = deviceName ?? AppTelemetry.deviceName;
+
+    final Map<String, dynamic> mergedDeviceInfo = Map.from(deviceInfo ?? {});
+    if (!mergedDeviceInfo.containsKey('device_name')) {
+      mergedDeviceInfo['device_name'] = effectiveDevice;
+    }
 
     final payload = {
       'app_id': effectiveAppId,
@@ -332,7 +387,7 @@ class AppTelemetry {
       'screen_name': screenName,
       'user_id': userId,
       'parameters': parameters,
-      'device_info': deviceInfo,
+      'device_info': mergedDeviceInfo,
     };
 
     http
@@ -350,11 +405,18 @@ class AppTelemetry {
     Map<String, dynamic>? parameters,
     String? userId,
     Map<String, dynamic>? deviceInfo,
+    String? deviceName,
     String? appId,
     String? serverUrl,
   }) {
     final targetUrl = serverUrl ?? '$defaultEndpoint/events';
     final effectiveAppId = appId ?? _defaultAppId;
+    final effectiveDevice = deviceName ?? AppTelemetry.deviceName;
+
+    final Map<String, dynamic> mergedDeviceInfo = Map.from(deviceInfo ?? {});
+    if (!mergedDeviceInfo.containsKey('device_name')) {
+      mergedDeviceInfo['device_name'] = effectiveDevice;
+    }
 
     final payload = {
       'app_id': effectiveAppId,
@@ -363,7 +425,7 @@ class AppTelemetry {
       'screen_name': screenName,
       'user_id': userId,
       'parameters': parameters,
-      'device_info': deviceInfo,
+      'device_info': mergedDeviceInfo,
     };
 
     http

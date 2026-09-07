@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS api_logs (
     request_payload TEXT,
     response_payload TEXT,
     duration_ms INTEGER,
+    device_name TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

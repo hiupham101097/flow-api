@@ -496,9 +496,10 @@ const res = await monitoredFetch('https://api.example.com/data');`;
       const errorMatch = (log.error_message || '').toLowerCase().includes(lowerSearch);
       const appMatch = (log.app_identifier || '').toLowerCase().includes(lowerSearch);
       const userMatch = (log.user_name || '').toLowerCase().includes(lowerSearch);
+      const deviceMatch = (log.device_name || '').toLowerCase().includes(lowerSearch);
       const jobMatch = (log.job_name || '').toLowerCase().includes(lowerSearch);
 
-      return endpointMatch || statusMatch || errorMatch || appMatch || userMatch || jobMatch;
+      return endpointMatch || statusMatch || errorMatch || appMatch || userMatch || jobMatch || deviceMatch;
     });
   }, [logs, activeTab, searchTerm]);
 
@@ -1097,16 +1098,24 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                             <span className={`type-badge ${isApp ? 'type-badge-app' : 'type-badge-web'}`} style={{ width: 'fit-content', fontSize: '0.72rem' }}>
                               {isApp ? '📱' : '🌐'} {log.job_name}
                             </span>
-                            <small style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>
-                              {log.user_name ? `👤 ${log.user_name}` : `ID: ${log.app_identifier || '-'}`}
+                            <small style={{ color: 'var(--text-dim)', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                              <span>{isApp ? '📱' : '💻'}</span>
+                              <span>{log.device_name || (isApp ? 'Thiết bị di động' : 'Trình duyệt Web')}</span>
                             </small>
                           </div>
                         ) : log.app_identifier ? (
-                          <span className="type-badge" style={{ background: 'rgba(148, 163, 184, 0.15)', color: '#94a3b8', fontSize: '0.72rem' }}>
-                            🏷️ {log.app_identifier}
-                          </span>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                            <span className="type-badge" style={{ background: 'rgba(148, 163, 184, 0.15)', color: '#94a3b8', fontSize: '0.72rem', width: 'fit-content' }}>
+                              🏷️ {log.app_identifier}
+                            </span>
+                            <small style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>
+                              📱 {log.device_name || 'Thiết bị di động'}
+                            </small>
+                          </div>
                         ) : (
-                          <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem' }}>Mặc định</span>
+                          <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem' }}>
+                            📱 {log.device_name || 'Mặc định'}
+                          </span>
                         )}
                       </td>
                       <td>
@@ -1564,10 +1573,10 @@ const res = await monitoredFetch('https://api.example.com/data');`;
 
                 <div style={{ textAlign: 'right' }}>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                    Người phụ trách & App ID
+                    Thiết bị gửi & App ID
                   </span>
                   <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                    {selectedLog.user_name ? `👤 ${selectedLog.user_name}` : 'Không có'}{' '}
+                    <span>📱 {selectedLog.device_name || (selectedLog.job_type === 'web' ? 'Trình duyệt Web' : 'Thiết bị di động')}</span>{' '}
                     {selectedLog.app_identifier ? `(<code>${selectedLog.app_identifier}</code>)` : ''}
                   </div>
                 </div>
