@@ -38,27 +38,40 @@ import 'package:http/http.dart' as http;
 class AppTelemetry {
   static String? _appId;
   static String? _deviceName;
+  static String? _userName;
   static String _serverUrl = 'https://flow-api.hieupham101097.workers.dev';
 
-  /// Khởi tạo telemetry với appId và tên thiết bị (ví dụ: 'iPhone 15 Pro', 'Samsung S24'...)
+  /// Khởi tạo telemetry với appId, tên thiết bị và tên người dùng (tùy chọn)
   /// Nếu để trống deviceName, hệ thống sẽ tự động phát hiện hệ điều hành (Android / iOS)
   static void initialize({
     required String appId,
     String? deviceName,
+    String? userName,
     String? serverUrl,
   }) {
     _appId = appId;
     if (deviceName != null && deviceName.isNotEmpty) {
       _deviceName = deviceName;
     }
+    if (userName != null && userName.isNotEmpty) {
+      _userName = userName;
+    }
     if (serverUrl != null && serverUrl.isNotEmpty) {
       _serverUrl = serverUrl;
     }
   }
 
+  /// Cập nhật tên thiết bị (ví dụ: 'iPhone 15 Pro', 'Samsung S24'...)
   static void setDeviceName(String name) {
     _deviceName = name;
   }
+
+  /// Cập nhật tên người dùng đăng nhập (ví dụ: 'Phạm Minh Hiếu', 'Nguyễn Văn A'...)
+  static void setUserName(String name) {
+    _userName = name;
+  }
+
+  static String? get userName => _userName;
 
   static String get deviceName {
     if (_deviceName != null && _deviceName!.isNotEmpty) {
@@ -180,12 +193,14 @@ class LoggingClient extends http.BaseClient {
   final String appId;
   final String serverUrl;
   final String? deviceName;
+  final String? userName;
 
   LoggingClient(
     this._inner, {
     this.appId = 'vn.fizahub.app',
     this.serverUrl = 'https://flow-api.hieupham101097.workers.dev',
     this.deviceName,
+    this.userName,
   });
 
   @override
@@ -199,7 +214,7 @@ class LoggingClient extends http.BaseClient {
       final bytes = await response.stream.toBytes();
       final responseBody = utf8.decode(bytes, allowMalformed: true);
 
-      // Gửi log bất đồng bộ lên Cloudflare kèm tên thiết bị
+      // Gửi log bất đồng bộ lên Cloudflare kèm tên thiết bị & tên người dùng
       _sendLog(
         endpoint: request.url.toString(),
         method: request.method,
@@ -242,6 +257,7 @@ class LoggingClient extends http.BaseClient {
   }) {
     try {
       final effectiveDevice = deviceName ?? AppTelemetry.deviceName;
+      final effectiveUser = userName ?? AppTelemetry.userName;
       http.post(
         Uri.parse('$serverUrl/logs'),
         headers: {'Content-Type': 'application/json'},
@@ -254,6 +270,8 @@ class LoggingClient extends http.BaseClient {
           'response_payload': responsePayload,
           'error_message': errorMessage,
           'device_name': effectiveDevice,
+          if (effectiveUser != null && effectiveUser.isNotEmpty)
+            'user_name': effectiveUser,
         }),
       ).catchError((_) => http.Response('', 500));
     } catch (_) {}
@@ -494,6 +512,9 @@ Future<UserModel?> login({
         final user = UserModel.fromJson(userDataMap);
 
         print('✅ Đăng nhập thành công: ${user.ten} (ID: ${user.id})');
+
+        // Gắn tên user vào Telemetry để các request API tiếp theo tự động hiển thị tên người dùng
+        AppTelemetry.setUserName(user.ten);
 
         // Ghi nhận sự kiện đăng nhập thành công vào Analytics
         AppTelemetry.logEvent('login_success', userId: user.id, parameters: {

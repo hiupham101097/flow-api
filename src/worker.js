@@ -294,16 +294,31 @@ export default {
         const jobId = url.searchParams.get('job_id');
         const userId = url.searchParams.get('user_id');
         const appIdentifier = url.searchParams.get('app_identifier') || url.searchParams.get('app_id');
+        const deviceParam = url.searchParams.get('device') || url.searchParams.get('device_name');
+        const ipParam = url.searchParams.get('ip') || url.searchParams.get('ip_address');
+        const userParam = url.searchParams.get('user') || url.searchParams.get('user_name');
         const limit = Math.min(Number(url.searchParams.get('limit')) || 150, 500);
 
         let query = `
           SELECT 
-            l.*,
+            l.id,
+            l.job_id,
+            l.app_identifier,
+            l.endpoint,
+            l.method,
+            l.status_code,
+            l.error_message,
+            l.request_payload,
+            l.response_payload,
+            l.duration_ms,
+            l.ip_address,
+            l.user_name,
             COALESCE(l.device_name, CASE WHEN j.type = 'web' THEN 'Trình duyệt Web' ELSE 'Thiết bị di động' END) as device_name,
+            l.created_at,
             j.name as job_name,
             j.type as job_type,
             u.id as user_id,
-            u.name as user_name
+            u.name as job_owner_name
           FROM api_logs l
           LEFT JOIN jobs j ON (l.job_id IS NOT NULL AND l.job_id = j.id) 
                            OR (l.app_identifier IS NOT NULL AND l.app_identifier = j.app_identifier)
@@ -323,6 +338,18 @@ export default {
         if (appIdentifier) {
           query += ' AND (l.app_identifier = ? OR j.app_identifier = ?)';
           params.push(appIdentifier, appIdentifier);
+        }
+        if (deviceParam) {
+          query += ' AND l.device_name LIKE ?';
+          params.push(`%${deviceParam}%`);
+        }
+        if (ipParam) {
+          query += ' AND l.ip_address LIKE ?';
+          params.push(`%${ipParam}%`);
+        }
+        if (userParam) {
+          query += ' AND l.user_name LIKE ?';
+          params.push(`%${userParam}%`);
         }
 
         query += ' ORDER BY l.created_at DESC LIMIT ?';
@@ -360,9 +387,24 @@ export default {
           job_id,
           device_name,
           device_info,
+          user_name,
+          user,
+          user_id,
+          ip_address,
         } = body;
 
-        let effectiveDeviceName = (device_name || '').trim();
+        const clientIp = (
+          request.headers.get('cf-connecting-ip') ||
+          request.headers.get('x-forwarded-for')?.split(',')[0] ||
+          request.headers.get('x-real-ip') ||
+          ip_address ||
+          body.ip ||
+          ''
+        ).trim();
+
+        const clientUserName = (user_name || user || (user_id ? String(user_id) : '')).trim();
+
+        let effectiveDeviceName = (device_name || body.device || '').trim();
         if (!effectiveDeviceName && device_info) {
           if (typeof device_info === 'object') {
             effectiveDeviceName = (device_info.device_name || device_info.model || device_info.name || device_info.os || '').trim();
@@ -406,6 +448,28 @@ export default {
           await env.DB.prepare(`
             INSERT INTO api_logs (
               job_id, app_identifier, endpoint, method, status_code, 
+              error_message, request_payload, response_payload, duration_ms,
+              device_name, user_name, ip_address
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).bind(
+            effectiveJobId,
+            effectiveAppIdentifier || null,
+            endpoint || '',
+            method || 'GET',
+            status_code || null,
+            error_message || null,
+            formatPayload(request_payload),
+            formatPayload(response_payload),
+            duration_ms || 0,
+            effectiveDeviceName || null,
+            clientUserName || null,
+            clientIp || null
+          ).run();
+        } catch (insertErr) {
+          // Fallback nếu cột mới gặp sự cố
+          await env.DB.prepare(`
+            INSERT INTO api_logs (
+              job_id, app_identifier, endpoint, method, status_code, 
               error_message, request_payload, response_payload, duration_ms, device_name
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).bind(
@@ -419,21 +483,6 @@ export default {
             formatPayload(response_payload),
             duration_ms || 0,
             effectiveDeviceName || null
-          ).run();
-        } catch (insertErr) {
-          // Fallback nếu cột device_name hoặc job_id / app_identifier gặp sự cố
-          await env.DB.prepare(`
-            INSERT INTO api_logs (
-              endpoint, method, status_code, error_message, request_payload, response_payload, duration_ms
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-          `).bind(
-            endpoint || '',
-            method || 'GET',
-            status_code || null,
-            error_message || null,
-            formatPayload(request_payload),
-            formatPayload(response_payload),
-            duration_ms || 0
           ).run();
         }
 

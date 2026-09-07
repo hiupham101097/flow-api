@@ -149,6 +149,8 @@ function Dashboard() {
   // User & Job Filtering State
   const [usersList, setUsersList] = useState([]);
   const [selectedFilter, setSelectedFilter] = useState(userIdFromUrl || 'all');
+  const [deviceFilter, setDeviceFilter] = useState('all');
+  const [userFilter, setUserFilter] = useState('all');
 
   const copyToClipboard = async (value, item) => {
     try {
@@ -246,7 +248,7 @@ function Dashboard() {
   // Reset trang về 1 khi đổi bộ lọc hoặc từ khóa tìm kiếm
   useEffect(() => {
     setLogsPage(1);
-  }, [activeTab, searchTerm, selectedFilter]);
+  }, [activeTab, searchTerm, selectedFilter, deviceFilter, userFilter]);
 
   useEffect(() => {
     setCrashPage(1);
@@ -476,6 +478,23 @@ const res = await monitoredFetch('https://api.example.com/data');`;
   const customEventCount = totalEvents - screenViewCount;
   const uniqueUsersCount = new Set(events.map((e) => e.user_id).filter(Boolean)).size;
 
+  // Unique devices and users for quick filtering
+  const uniqueDevices = useMemo(() => {
+    const set = new Set();
+    logs.forEach((l) => {
+      if (l.device_name) set.add(l.device_name);
+    });
+    return Array.from(set);
+  }, [logs]);
+
+  const uniqueUsers = useMemo(() => {
+    const set = new Set();
+    logs.forEach((l) => {
+      if (l.user_name) set.add(l.user_name);
+    });
+    return Array.from(set);
+  }, [logs]);
+
   // Filter and search Logs
   const filteredLogs = useMemo(() => {
     return logs.filter((log) => {
@@ -488,6 +507,8 @@ const res = await monitoredFetch('https://api.example.com/data');`;
       })();
 
       if (!matchesTab) return false;
+      if (deviceFilter !== 'all' && log.device_name !== deviceFilter) return false;
+      if (userFilter !== 'all' && log.user_name !== userFilter) return false;
 
       if (!searchTerm) return true;
       const lowerSearch = searchTerm.toLowerCase();
@@ -497,11 +518,12 @@ const res = await monitoredFetch('https://api.example.com/data');`;
       const appMatch = (log.app_identifier || '').toLowerCase().includes(lowerSearch);
       const userMatch = (log.user_name || '').toLowerCase().includes(lowerSearch);
       const deviceMatch = (log.device_name || '').toLowerCase().includes(lowerSearch);
+      const ipMatch = (log.ip_address || '').toLowerCase().includes(lowerSearch);
       const jobMatch = (log.job_name || '').toLowerCase().includes(lowerSearch);
 
-      return endpointMatch || statusMatch || errorMatch || appMatch || userMatch || jobMatch || deviceMatch;
+      return endpointMatch || statusMatch || errorMatch || appMatch || userMatch || jobMatch || deviceMatch || ipMatch;
     });
-  }, [logs, activeTab, searchTerm]);
+  }, [logs, activeTab, searchTerm, deviceFilter, userFilter]);
 
   // Filter and search Crashes
   const filteredCrashes = useMemo(() => {
@@ -1018,6 +1040,36 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                 </button>
               </div>
 
+              {uniqueDevices.length > 0 && (
+                <select
+                  value={deviceFilter}
+                  onChange={(e) => setDeviceFilter(e.target.value)}
+                  className="filter-select-mini"
+                  aria-label="Lọc theo thiết bị"
+                  title="Lọc theo thiết bị"
+                >
+                  <option value="all">📱 Tất cả thiết bị ({uniqueDevices.length})</option>
+                  {uniqueDevices.map((d) => (
+                    <option key={d} value={d}>📱 {d}</option>
+                  ))}
+                </select>
+              )}
+
+              {uniqueUsers.length > 0 && (
+                <select
+                  value={userFilter}
+                  onChange={(e) => setUserFilter(e.target.value)}
+                  className="filter-select-mini"
+                  aria-label="Lọc theo người dùng"
+                  title="Lọc theo người dùng"
+                >
+                  <option value="all">👤 Tất cả user ({uniqueUsers.length})</option>
+                  {uniqueUsers.map((u) => (
+                    <option key={u} value={u}>👤 {u}</option>
+                  ))}
+                </select>
+              )}
+
               <label className="search-field">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <circle cx="11" cy="11" r="6" />
@@ -1026,7 +1078,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                 <span className="sr-only">Tìm kiếm logs</span>
                 <input
                   type="search"
-                  placeholder="Tìm endpoint, user, app ID, lỗi..."
+                  placeholder="Tìm theo Tên, Thiết bị, IP máy, URL..."
                   value={searchTerm}
                   onChange={(event) => setSearchTerm(event.target.value)}
                 />
@@ -1093,30 +1145,47 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                         <div style={{ color: 'var(--text-dim)' }}>{new Date(log.created_at).toLocaleTimeString('vi-VN')}</div>
                       </td>
                       <td>
-                        {log.job_name ? (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.28rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
                             <span className={`type-badge ${isApp ? 'type-badge-app' : 'type-badge-web'}`} style={{ width: 'fit-content', fontSize: '0.72rem' }}>
-                              {isApp ? '📱' : '🌐'} {log.job_name}
+                              {isApp ? '📱' : '🌐'} {log.job_name || log.app_identifier || 'App'}
                             </span>
-                            <small style={{ color: 'var(--text-dim)', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                              <span>{isApp ? '📱' : '💻'}</span>
-                              <span>{log.device_name || (isApp ? 'Thiết bị di động' : 'Trình duyệt Web')}</span>
-                            </small>
+                            {log.user_name ? (
+                              <span
+                                className="user-tag"
+                                style={{ fontSize: '0.72rem', cursor: 'pointer', padding: '0.1rem 0.35rem' }}
+                                title="Nhấp để lọc theo người dùng này"
+                                onClick={(e) => { e.stopPropagation(); setSearchTerm(log.user_name); }}
+                              >
+                                👤 {log.user_name}
+                              </span>
+                            ) : null}
                           </div>
-                        ) : log.app_identifier ? (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                            <span className="type-badge" style={{ background: 'rgba(148, 163, 184, 0.15)', color: '#94a3b8', fontSize: '0.72rem', width: 'fit-content' }}>
-                              🏷️ {log.app_identifier}
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap', fontSize: '0.72rem', color: 'var(--text-dim)' }}>
+                            <span
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', cursor: 'pointer' }}
+                              title="Nhấp để lọc theo thiết bị"
+                              onClick={(e) => { e.stopPropagation(); setSearchTerm(log.device_name || ''); }}
+                            >
+                              <span>📱</span>
+                              <strong style={{ color: 'var(--text-muted)' }}>
+                                {log.device_name || (isApp ? 'Thiết bị di động' : 'Trình duyệt Web')}
+                              </strong>
                             </span>
-                            <small style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>
-                              📱 {log.device_name || 'Thiết bị di động'}
-                            </small>
+
+                            {log.ip_address ? (
+                              <span
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', cursor: 'pointer', opacity: 0.85 }}
+                                title="Nhấp để lọc theo IP này"
+                                onClick={(e) => { e.stopPropagation(); setSearchTerm(log.ip_address); }}
+                              >
+                                <span>🌐</span>
+                                <code>{log.ip_address}</code>
+                              </span>
+                            ) : null}
                           </div>
-                        ) : (
-                          <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem' }}>
-                            📱 {log.device_name || 'Mặc định'}
-                          </span>
-                        )}
+                        </div>
                       </td>
                       <td>
                         <span className={`method-badge ${(log.method || '').toLowerCase()}`}>
@@ -1573,11 +1642,17 @@ const res = await monitoredFetch('https://api.example.com/data');`;
 
                 <div style={{ textAlign: 'right' }}>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                    Thiết bị gửi & App ID
+                    Thiết bị & Người dùng
                   </span>
-                  <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                    <span>📱 {selectedLog.device_name || (selectedLog.job_type === 'web' ? 'Trình duyệt Web' : 'Thiết bị di động')}</span>{' '}
-                    {selectedLog.app_identifier ? `(<code>${selectedLog.app_identifier}</code>)` : ''}
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.2rem', display: 'flex', flexDirection: 'column', gap: '0.2rem', alignItems: 'flex-end' }}>
+                    <div>
+                      <span>📱 {selectedLog.device_name || (selectedLog.job_type === 'web' ? 'Trình duyệt Web' : 'Thiết bị di động')}</span>{' '}
+                      {selectedLog.app_identifier ? `(<code>${selectedLog.app_identifier}</code>)` : ''}
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-dim)' }}>
+                      {selectedLog.user_name ? <span>👤 {selectedLog.user_name} · </span> : ''}
+                      {selectedLog.ip_address ? <span>🌐 IP: <code>{selectedLog.ip_address}</code></span> : ''}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1636,6 +1711,14 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                 <div>
                   <span className="meta-label">Độ trễ phản hồi</span>
                   <strong className="meta-value">{selectedLog.duration_ms || 0} ms</strong>
+                </div>
+                <div>
+                  <span className="meta-label">Địa chỉ IP máy</span>
+                  <strong className="meta-value">{selectedLog.ip_address || 'Không xác định'}</strong>
+                </div>
+                <div>
+                  <span className="meta-label">Người dùng (User)</span>
+                  <strong className="meta-value">{selectedLog.user_name || 'Khách / Ẩn danh'}</strong>
                 </div>
                 <div>
                   <span className="meta-label">Thời điểm ghi nhận</span>

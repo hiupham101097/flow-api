@@ -735,6 +735,29 @@ input:focus-visible {
   font-size: 0.65rem;
 }
 
+.filter-select-mini {
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 0.45rem 0.75rem;
+  border-radius: 9px;
+  font-size: 0.76rem;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+  transition: all 120ms ease;
+  min-height: 38px;
+}
+
+.filter-select-mini:hover {
+  border-color: var(--accent);
+}
+
+.filter-select-mini:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(94, 126, 234, 0.25);
+}
+
 .dot {
   width: 7px;
   height: 7px;

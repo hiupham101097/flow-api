@@ -72,11 +72,13 @@ class LoggingClient extends http.BaseClient {
   );
 
   final String? deviceName;
+  final String? userName;
 
   LoggingClient(
     this._inner, {
     this.appId = 'default_app',
     this.deviceName,
+    this.userName,
   });
 
   @override
@@ -152,6 +154,7 @@ class LoggingClient extends http.BaseClient {
         durationMs: duration,
         appId: appId,
         deviceName: deviceName,
+        userName: userName,
         serverUrl: '$_apiMonitorUrl/logs',
       );
 
@@ -169,6 +172,7 @@ class LoggingClient extends http.BaseClient {
         durationMs: duration,
         appId: appId,
         deviceName: deviceName,
+        userName: userName,
         serverUrl: '$_apiMonitorUrl/logs',
       );
 
@@ -228,6 +232,7 @@ class ApiLogger {
     required int durationMs,
     String appId = 'default_app',
     String? deviceName,
+    String? userName,
     String? serverUrl,
   }) {
     // Avoid sending excessively large payloads (> 200 KB)
@@ -236,6 +241,7 @@ class ApiLogger {
 
     final targetUrl = serverUrl ?? '$defaultEndpoint/logs';
     final effectiveDevice = (deviceName != null && deviceName.isNotEmpty) ? deviceName : AppTelemetry.deviceName;
+    final effectiveUser = (userName != null && userName.isNotEmpty) ? userName : AppTelemetry.userName;
 
     final payload = {
       'app_id': appId,
@@ -247,6 +253,7 @@ class ApiLogger {
       'response_payload': safeResponse,
       'duration_ms': durationMs,
       if (effectiveDevice.isNotEmpty) 'device_name': effectiveDevice,
+      if (effectiveUser != null && effectiveUser.isNotEmpty) 'user_name': effectiveUser,
     };
 
     http
@@ -282,19 +289,24 @@ class ApiLogger {
 class AppTelemetry {
   static String _defaultAppId = 'default_app';
   static String? _deviceName;
+  static String? _userName;
   static const String defaultEndpoint = String.fromEnvironment(
     'API_MONITOR_URL',
     defaultValue: 'https://flow-api.hieupham101097.workers.dev',
   );
 
-  /// Khởi tạo mã App ID và Tên thiết bị mặc định cho toàn bộ telemetry
+  /// Khởi tạo mã App ID, Tên thiết bị và Tên người dùng cho toàn bộ telemetry
   static void initialize({
     required String appId,
     String? deviceName,
+    String? userName,
   }) {
     _defaultAppId = appId;
     if (deviceName != null && deviceName.isNotEmpty) {
       _deviceName = deviceName;
+    }
+    if (userName != null && userName.isNotEmpty) {
+      _userName = userName;
     }
   }
 
@@ -302,6 +314,13 @@ class AppTelemetry {
   static void setDeviceName(String name) {
     _deviceName = name;
   }
+
+  /// Cập nhật tên người dùng / tài khoản đăng nhập (ví dụ: 'Phạm Minh Hiếu', 'nguyen_van_a'...)
+  static void setUserName(String name) {
+    _userName = name;
+  }
+
+  static String? get userName => _userName;
 
   /// Lấy tên thiết bị (tự động nhận diện nếu chưa cấu hình thủ công)
   static String get deviceName {
