@@ -166,28 +166,45 @@ function Dashboard() {
 
   const fetchUsers = async () => {
     try {
-      const response = await fetch(`${API_MONITOR_URL}/users`);
+      const response = await fetch(`${API_MONITOR_URL}/users`, {
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+      });
       if (response.ok) {
         const data = await response.json();
-        setUsersList(Array.isArray(data) ? data : []);
+        if (Array.isArray(data)) {
+          setUsersList(data);
+        }
       }
-    } catch (_) {}
+    } catch (err) {
+      console.warn('Lỗi tải /users, chuyển sang tự nhận diện từ telemetry:', err);
+    }
   };
 
   const fetchAllTelemetry = async (overrideFilter) => {
     try {
+      // Đảm bảo usersList luôn được nạp lại nếu trước đó WebView kết nối trễ
+      if (usersList.length === 0) {
+        fetchUsers();
+      }
+
       const activeUser = overrideFilter !== undefined ? overrideFilter : selectedFilter;
       const queryParts = [];
 
       if (activeUser && activeUser !== 'all') {
-        queryParts.push(`user_id=${encodeURIComponent(activeUser)}`);
+        if (!isNaN(Number(activeUser))) {
+          queryParts.push(`user_id=${encodeURIComponent(activeUser)}`);
+        } else {
+          queryParts.push(`app_identifier=${encodeURIComponent(activeUser)}`);
+        }
       }
       const queryString = queryParts.length > 0 ? `?${queryParts.join('&')}` : '';
 
+      const fetchOptions = { cache: 'no-store' };
       const [logsRes, crashesRes, eventsRes] = await Promise.all([
-        fetch(`${API_MONITOR_URL}/logs${queryString}`),
-        fetch(`${API_MONITOR_URL}/crashes${queryString}`),
-        fetch(`${API_MONITOR_URL}/events${queryString}`),
+        fetch(`${API_MONITOR_URL}/logs${queryString}`, fetchOptions),
+        fetch(`${API_MONITOR_URL}/crashes${queryString}`, fetchOptions),
+        fetch(`${API_MONITOR_URL}/events${queryString}`, fetchOptions),
       ]);
 
       if (logsRes.ok) {
@@ -291,10 +308,59 @@ function Dashboard() {
     }
   };
 
+  // Danh sách App / Job khả dụng để lọc - tự động kết hợp từ /users API VÀ từ dữ liệu telemetry
+  // Giúp dropdown KHÔNG BAO GIỜ bị rỗng kể cả khi chạy webview WinForms bị nghẽn mạng ban đầu!
+  const availableJobs = useMemo(() => {
+    const list = [];
+    const seen = new Set();
+
+    if (Array.isArray(usersList)) {
+      usersList.forEach((u) => {
+        if (u && (u.job_name || u.app_identifier)) {
+          const key = u.app_identifier || `user_${u.id}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            list.push({
+              id: String(u.id),
+              filterValue: String(u.id),
+              job_name: u.job_name || u.name,
+              app_identifier: u.app_identifier || '',
+              job_type: u.job_type || 'app',
+              name: u.name,
+            });
+          }
+        }
+      });
+    }
+
+    // Dự phòng khi usersList chưa tải xong hoặc mạng WebView bị nghẽn
+    const scanItems = [...logs, ...crashes, ...events];
+    scanItems.forEach((item) => {
+      const appId = item.app_identifier;
+      if (appId && !seen.has(appId)) {
+        seen.add(appId);
+        list.push({
+          id: appId,
+          filterValue: item.job_id ? String(item.job_id) : appId,
+          job_name: item.job_name || appId,
+          app_identifier: appId,
+          job_type: 'app',
+          name: item.user_name || 'App Telemetry',
+        });
+      }
+    });
+
+    return list;
+  }, [usersList, logs, crashes, events]);
+
   const activeUserJob = useMemo(() => {
-    if (selectedFilter === 'all') return null;
-    return usersList.find((u) => String(u.id) === String(selectedFilter)) || null;
-  }, [selectedFilter, usersList]);
+    if (!selectedFilter || selectedFilter === 'all') return null;
+    return availableJobs.find(
+      (u) => String(u.id) === String(selectedFilter) || 
+             String(u.filterValue) === String(selectedFilter) ||
+             String(u.app_identifier) === String(selectedFilter)
+    ) || null;
+  }, [selectedFilter, availableJobs]);
 
   const currentAppId = activeUserJob?.app_identifier || 'vn.fizahub.app';
 
@@ -478,22 +544,45 @@ const res = await monitoredFetch('https://api.example.com/data');`;
   const customEventCount = totalEvents - screenViewCount;
   const uniqueUsersCount = new Set(events.map((e) => e.user_id).filter(Boolean)).size;
 
-  // Unique devices and users for quick filtering
+  // Unique devices and users for quick filtering - tổng hợp từ tất cả logs, crashes và events
   const uniqueDevices = useMemo(() => {
     const set = new Set();
-    logs.forEach((l) => {
-      if (l.device_name) set.add(l.device_name);
+    logs.forEach((l) => { if (l.device_name) set.add(l.device_name); });
+    crashes.forEach((c) => {
+      if (c.device_info) {
+        try {
+          const parsed = JSON.parse(c.device_info);
+          if (parsed.device || parsed.model || parsed.name) set.add(parsed.device || parsed.model || parsed.name);
+          else if (typeof c.device_info === 'string') set.add(c.device_info);
+        } catch {
+          if (typeof c.device_info === 'string') set.add(c.device_info);
+        }
+      }
     });
-    return Array.from(set);
-  }, [logs]);
+    events.forEach((e) => {
+      if (e.device_info) {
+        try {
+          const parsed = JSON.parse(e.device_info);
+          if (parsed.device || parsed.model || parsed.name) set.add(parsed.device || parsed.model || parsed.name);
+          else if (typeof e.device_info === 'string') set.add(e.device_info);
+        } catch {
+          if (typeof e.device_info === 'string') set.add(e.device_info);
+        }
+      }
+    });
+    return Array.from(set).filter(Boolean);
+  }, [logs, crashes, events]);
 
   const uniqueUsers = useMemo(() => {
     const set = new Set();
-    logs.forEach((l) => {
-      if (l.user_name) set.add(l.user_name);
+    logs.forEach((l) => { if (l.user_name) set.add(l.user_name); });
+    crashes.forEach((c) => { if (c.user_name) set.add(c.user_name); });
+    events.forEach((e) => {
+      if (e.user_name) set.add(e.user_name);
+      else if (e.user_id) set.add(e.user_id);
     });
-    return Array.from(set);
-  }, [logs]);
+    return Array.from(set).filter(Boolean);
+  }, [logs, crashes, events]);
 
   // Filter and search Logs
   const filteredLogs = useMemo(() => {
@@ -531,6 +620,12 @@ const res = await monitoredFetch('https://api.example.com/data');`;
       if (crashTab === 'fatal' && Number(crash.is_fatal) !== 1) return false;
       if (crashTab === 'non-fatal' && Number(crash.is_fatal) === 1) return false;
 
+      if (deviceFilter !== 'all') {
+        const dLower = deviceFilter.toLowerCase();
+        if (!(crash.device_info || '').toLowerCase().includes(dLower)) return false;
+      }
+      if (userFilter !== 'all' && crash.user_name !== userFilter) return false;
+
       if (!searchTerm) return true;
       const lower = searchTerm.toLowerCase();
       const msgMatch = (crash.error_message || '').toLowerCase().includes(lower);
@@ -542,7 +637,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
 
       return msgMatch || stackMatch || appMatch || userMatch || jobMatch || deviceMatch;
     });
-  }, [crashes, crashTab, searchTerm]);
+  }, [crashes, crashTab, searchTerm, deviceFilter, userFilter]);
 
   // Filter and search Analytics
   const filteredEvents = useMemo(() => {
@@ -550,6 +645,14 @@ const res = await monitoredFetch('https://api.example.com/data');`;
       const isScreen = event.event_type === 'screen_view' || event.event_name === 'screen_view';
       if (eventTab === 'screen_view' && !isScreen) return false;
       if (eventTab === 'custom' && isScreen) return false;
+
+      if (deviceFilter !== 'all') {
+        const dLower = deviceFilter.toLowerCase();
+        if (!(event.device_info || '').toLowerCase().includes(dLower)) return false;
+      }
+      if (userFilter !== 'all') {
+        if (event.user_name !== userFilter && event.user_id !== userFilter) return false;
+      }
 
       if (!searchTerm) return true;
       const lower = searchTerm.toLowerCase();
@@ -562,7 +665,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
 
       return nameMatch || screenMatch || userMatch || appMatch || jobMatch || paramMatch;
     });
-  }, [events, eventTab, searchTerm]);
+  }, [events, eventTab, searchTerm, deviceFilter, userFilter]);
 
   // Sliced data cho phân trang (Cắt nhỏ danh sách hiển thị, tăng tốc 60 FPS cho WebView)
   const paginatedLogs = useMemo(() => {
@@ -690,13 +793,18 @@ const res = await monitoredFetch('https://api.example.com/data');`;
             className="user-filter-select"
             value={selectedFilter}
             onChange={(e) => handleFilterChange(e.target.value)}
+            aria-label="Chọn ứng dụng giám sát"
+            title="Chọn ứng dụng hoặc toàn bộ hệ thống để lọc"
           >
             <option value="all">🌐 Toàn bộ hệ thống (Tất cả telemetry)</option>
-            {usersList.filter((u) => u.job_name).map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.job_type === 'app' ? '📱' : '🌐'} {u.job_name} ({u.app_identifier})
+            {availableJobs.map((u) => (
+              <option key={u.id} value={u.filterValue || u.id}>
+                {u.job_type === 'app' ? '📱' : '🌐'} {u.job_name}{u.app_identifier ? ` (${u.app_identifier})` : ''}
               </option>
             ))}
+            {loading && availableJobs.length === 0 && (
+              <option disabled value="">⏳ Đang đồng bộ danh sách ứng dụng...</option>
+            )}
           </select>
 
           {selectedFilter !== 'all' && (
@@ -1040,35 +1148,31 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                 </button>
               </div>
 
-              {uniqueDevices.length > 0 && (
-                <select
-                  value={deviceFilter}
-                  onChange={(e) => setDeviceFilter(e.target.value)}
-                  className="filter-select-mini"
-                  aria-label="Lọc theo thiết bị"
-                  title="Lọc theo thiết bị"
-                >
-                  <option value="all">📱 Tất cả thiết bị ({uniqueDevices.length})</option>
-                  {uniqueDevices.map((d) => (
-                    <option key={d} value={d}>📱 {d}</option>
-                  ))}
-                </select>
-              )}
+              <select
+                value={deviceFilter}
+                onChange={(e) => setDeviceFilter(e.target.value)}
+                className="filter-select-mini"
+                aria-label="Lọc theo thiết bị"
+                title="Lọc theo thiết bị"
+              >
+                <option value="all">📱 Tất cả thiết bị {uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}</option>
+                {uniqueDevices.map((d) => (
+                  <option key={d} value={d}>📱 {d}</option>
+                ))}
+              </select>
 
-              {uniqueUsers.length > 0 && (
-                <select
-                  value={userFilter}
-                  onChange={(e) => setUserFilter(e.target.value)}
-                  className="filter-select-mini"
-                  aria-label="Lọc theo người dùng"
-                  title="Lọc theo người dùng"
-                >
-                  <option value="all">👤 Tất cả user ({uniqueUsers.length})</option>
-                  {uniqueUsers.map((u) => (
-                    <option key={u} value={u}>👤 {u}</option>
-                  ))}
-                </select>
-              )}
+              <select
+                value={userFilter}
+                onChange={(e) => setUserFilter(e.target.value)}
+                className="filter-select-mini"
+                aria-label="Lọc theo người dùng"
+                title="Lọc theo người dùng"
+              >
+                <option value="all">👤 Tất cả user {uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}</option>
+                {uniqueUsers.map((u) => (
+                  <option key={u} value={u}>👤 {u}</option>
+                ))}
+              </select>
 
               <label className="search-field">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1276,6 +1380,32 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                 </button>
               </div>
 
+              <select
+                value={deviceFilter}
+                onChange={(e) => setDeviceFilter(e.target.value)}
+                className="filter-select-mini"
+                aria-label="Lọc theo thiết bị"
+                title="Lọc theo thiết bị"
+              >
+                <option value="all">📱 Tất cả thiết bị {uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}</option>
+                {uniqueDevices.map((d) => (
+                  <option key={d} value={d}>📱 {d}</option>
+                ))}
+              </select>
+
+              <select
+                value={userFilter}
+                onChange={(e) => setUserFilter(e.target.value)}
+                className="filter-select-mini"
+                aria-label="Lọc theo người dùng"
+                title="Lọc theo người dùng"
+              >
+                <option value="all">👤 Tất cả user {uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}</option>
+                {uniqueUsers.map((u) => (
+                  <option key={u} value={u}>👤 {u}</option>
+                ))}
+              </select>
+
               <label className="search-field">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <circle cx="11" cy="11" r="6" />
@@ -1440,6 +1570,32 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                   📱 Screen Views <span className="tab-count">{screenViewCount}</span>
                 </button>
               </div>
+
+              <select
+                value={deviceFilter}
+                onChange={(e) => setDeviceFilter(e.target.value)}
+                className="filter-select-mini"
+                aria-label="Lọc theo thiết bị"
+                title="Lọc theo thiết bị"
+              >
+                <option value="all">📱 Tất cả thiết bị {uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}</option>
+                {uniqueDevices.map((d) => (
+                  <option key={d} value={d}>📱 {d}</option>
+                ))}
+              </select>
+
+              <select
+                value={userFilter}
+                onChange={(e) => setUserFilter(e.target.value)}
+                className="filter-select-mini"
+                aria-label="Lọc theo người dùng"
+                title="Lọc theo người dùng"
+              >
+                <option value="all">👤 Tất cả user {uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}</option>
+                {uniqueUsers.map((u) => (
+                  <option key={u} value={u}>👤 {u}</option>
+                ))}
+              </select>
 
               <label className="search-field">
                 <svg viewBox="0 0 24 24" aria-hidden="true">

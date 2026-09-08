@@ -54,6 +54,41 @@ textarea {
   touch-action: manipulation;
 }
 
+/* Tương thích tối đa cho WebView trên WinForms / Chromium:
+   Đảm bảo menu xổ xuống không bị trắng xoá chữ, không bị chìm nền, có icon mũi tên rõ ràng */
+select {
+  color-scheme: dark !important;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-color: var(--surface-raised);
+  color: var(--text) !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2393a4b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  background-size: 13px 13px;
+  padding-right: 2.25rem !important;
+  cursor: pointer;
+  pointer-events: auto !important;
+}
+
+select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+select option {
+  background-color: #0d151f !important;
+  color: #edf4fa !important;
+  padding: 8px 12px;
+}
+
+select optgroup {
+  background-color: #0d151f !important;
+  color: #93a4b8 !important;
+  font-weight: 600;
+}
+
 button,
 a {
   -webkit-tap-highlight-color: transparent;
@@ -1611,16 +1646,20 @@ tbody tr.row-error:hover {
   color: var(--text);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
-  padding: 0.55rem 1rem;
+  padding: 0.55rem 2.25rem 0.55rem 1rem;
   font-size: 0.85rem;
   font-family: inherit;
   cursor: pointer;
   outline: none;
   min-width: 260px;
+  position: relative;
+  z-index: 2;
+  pointer-events: auto;
 }
 
 .user-filter-select:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(94, 126, 234, 0.25);
 }
 
 /* ==========================================================================
