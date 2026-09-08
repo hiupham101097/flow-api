@@ -1,8 +1,123 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import '../../styles/global.css';
 
 const API_MONITOR_URL = import.meta.env.VITE_WORKER_URL || 'https://flow-api.hieupham101097.workers.dev';
+
+// Chuẩn hóa timestamp SQLite UTC sang Date object
+function parseUtcDate(dateStr) {
+  if (!dateStr) return null;
+  // SQLite trả về: "YYYY-MM-DD HH:MM:SS" (không có T và Z)
+  // Chuẩn hóa thành ISO 8601 UTC để mọi trình duyệt hiểu đúng múi giờ UTC
+  const cleanStr = String(dateStr).trim();
+  const isoStr = cleanStr.includes('T')
+    ? (cleanStr.endsWith('Z') ? cleanStr : `${cleanStr}Z`)
+    : `${cleanStr.replace(' ', 'T')}Z`;
+  const d = new Date(isoStr);
+  return isNaN(d.getTime()) ? new Date(dateStr) : d;
+}
+
+// Luôn hiển thị chính xác theo Giờ Việt Nam (Asia/Ho_Chi_Minh - GMT+7), 24h
+function formatVietnamTime(dateStr) {
+  const d = parseUtcDate(dateStr);
+  if (!d || isNaN(d.getTime())) return '—';
+  return d.toLocaleTimeString('vi-VN', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    hour12: false,
+  });
+}
+
+function formatVietnamDate(dateStr) {
+  const d = parseUtcDate(dateStr);
+  if (!d || isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('vi-VN', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+  });
+}
+
+function formatVietnamDateTime(dateStr) {
+  const d = parseUtcDate(dateStr);
+  if (!d || isNaN(d.getTime())) return '—';
+  return `${d.toLocaleTimeString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour12: false })} - ${d.toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}`;
+}
+
+// Dropdown tuỳ chỉnh chạy thuần DOM - không tạo Win32 HWND popup riêng của Windows,
+// giải quyết triệt để lỗi dropdown không mở / không tương tác được trên WinForms WebView
+function CustomSelect({
+  value,
+  onChange,
+  options = [],
+  className = '',
+  ariaLabel = '',
+  placeholder = 'Chọn...',
+  alignRight = false,
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (containerRef.current && !containerRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    }
+    function handleKeyDown(event) {
+      if (event.key === 'Escape') setIsOpen(false);
+    }
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('touchstart', handleClickOutside);
+      document.addEventListener('keydown', handleKeyDown);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen]);
+
+  const selectedOption = options.find((opt) => String(opt.value) === String(value)) || options[0];
+
+  return (
+    <div className={`custom-select-container ${className}`} ref={containerRef}>
+      <button
+        type="button"
+        className="custom-select-trigger"
+        onClick={() => setIsOpen((prev) => !prev)}
+        aria-expanded={isOpen}
+        aria-label={ariaLabel}
+      >
+        <span className="custom-select-label">
+          {selectedOption ? selectedOption.label : placeholder}
+        </span>
+        <span className={`custom-select-arrow ${isOpen ? 'open' : ''}`}>▾</span>
+      </button>
+
+      {isOpen && (
+        <div className={`custom-select-menu ${alignRight ? 'align-right' : ''}`} role="listbox">
+          {options.map((opt) => {
+            const isSelected = String(opt.value) === String(value);
+            return (
+              <button
+                key={String(opt.value)}
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                className={`custom-select-option ${isSelected ? 'selected' : ''}`}
+                onClick={() => {
+                  onChange(opt.value);
+                  setIsOpen(false);
+                }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function CodeBlock({ label, value, copyKey, copiedItem, onCopy }) {
   return (
@@ -39,20 +154,21 @@ function PaginationDock({ currentPage, totalItems, pageSize, onPageChange, onPag
     <div className="pagination-dock">
       <div className="pagination-info">
         <span>Hiển thị <strong>{startItem} - {endItem}</strong> / <strong>{totalItems}</strong> mục</span>
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', marginLeft: '0.5rem' }}>
-          <span>Mỗi trang:</span>
-          <select
-            className="pagination-size-select"
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', marginLeft: '0.65rem' }}>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Mỗi trang:</span>
+          <CustomSelect
+            className="select-pagination"
             value={pageSize}
-            onChange={(e) => onPageSizeChange(Number(e.target.value))}
-            aria-label="Số dòng mỗi trang"
-          >
-            <option value={10}>10</option>
-            <option value={20}>20 (Mượt nhất)</option>
-            <option value={50}>50</option>
-            <option value={100}>100</option>
-          </select>
-        </label>
+            onChange={(val) => onPageSizeChange(Number(val))}
+            options={[
+              { value: 10, label: '10' },
+              { value: 20, label: '20' },
+              { value: 50, label: '50' },
+              { value: 100, label: '100' },
+            ]}
+            ariaLabel="Số dòng mỗi trang"
+          />
+        </div>
       </div>
 
       <div className="pagination-nav">
@@ -452,7 +568,7 @@ setupAxiosMonitor(axios, '${currentAppId}');`;
 const monitoredFetch = createMonitoredFetch('${currentAppId}');
 const res = await monitoredFetch('https://api.example.com/data');`;
 
-  const formatDate = (dateString) => new Date(dateString).toLocaleString('vi-VN');
+  const formatDate = (dateString) => formatVietnamDateTime(dateString);
 
   const getStatusMeta = (statusCode) => {
     const code = Number(statusCode);
@@ -699,18 +815,19 @@ const res = await monitoredFetch('https://api.example.com/data');`;
         <div className="topbar-actions">
           <div className="auto-refresh-dock">
             <span style={{ fontSize: '0.78rem' }}>Tự làm mới:</span>
-            <select
-              className="auto-refresh-select"
+            <CustomSelect
+              className="select-mini"
               value={refreshInterval}
-              onChange={(e) => setRefreshInterval(Number(e.target.value))}
-              title="Chu kỳ tự động tải dữ liệu mới"
-              aria-label="Chu kỳ tự động tải dữ liệu mới"
-            >
-              <option value={0}>Tắt (Tiết kiệm PIN/RAM)</option>
-              <option value={10000}>10 giây</option>
-              <option value={15000}>15 giây (Khuyên dùng)</option>
-              <option value={30000}>30 giây</option>
-            </select>
+              onChange={(val) => setRefreshInterval(Number(val))}
+              options={[
+                { value: 0, label: 'Tắt (Tiết kiệm PIN)' },
+                { value: 10000, label: '10 giây' },
+                { value: 15000, label: '15 giây' },
+                { value: 30000, label: '30 giây' },
+              ]}
+              alignRight={true}
+              ariaLabel="Chu kỳ tự động tải dữ liệu mới"
+            />
           </div>
           <button
             type="button"
@@ -789,23 +906,20 @@ const res = await monitoredFetch('https://api.example.com/data');`;
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <select
-            className="user-filter-select"
+          <CustomSelect
+            className="user-filter-custom"
             value={selectedFilter}
-            onChange={(e) => handleFilterChange(e.target.value)}
-            aria-label="Chọn ứng dụng giám sát"
-            title="Chọn ứng dụng hoặc toàn bộ hệ thống để lọc"
-          >
-            <option value="all">🌐 Toàn bộ hệ thống (Tất cả telemetry)</option>
-            {availableJobs.map((u) => (
-              <option key={u.id} value={u.filterValue || u.id}>
-                {u.job_type === 'app' ? '📱' : '🌐'} {u.job_name}{u.app_identifier ? ` (${u.app_identifier})` : ''}
-              </option>
-            ))}
-            {loading && availableJobs.length === 0 && (
-              <option disabled value="">⏳ Đang đồng bộ danh sách ứng dụng...</option>
-            )}
-          </select>
+            onChange={(val) => handleFilterChange(val)}
+            options={[
+              { value: 'all', label: '🌐 Toàn bộ hệ thống (Tất cả telemetry)' },
+              ...availableJobs.map((u) => ({
+                value: u.filterValue || u.id,
+                label: `${u.job_type === 'app' ? '📱' : '🌐'} ${u.job_name}${u.app_identifier ? ` (${u.app_identifier})` : ''}`,
+              })),
+            ]}
+            ariaLabel="Chọn mục tiêu giám sát"
+            placeholder="Chọn mục tiêu giám sát..."
+          />
 
           {selectedFilter !== 'all' && (
             <button
@@ -1148,31 +1262,27 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                 </button>
               </div>
 
-              <select
+              <CustomSelect
+                className="select-mini"
                 value={deviceFilter}
-                onChange={(e) => setDeviceFilter(e.target.value)}
-                className="filter-select-mini"
-                aria-label="Lọc theo thiết bị"
-                title="Lọc theo thiết bị"
-              >
-                <option value="all">📱 Tất cả thiết bị {uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}</option>
-                {uniqueDevices.map((d) => (
-                  <option key={d} value={d}>📱 {d}</option>
-                ))}
-              </select>
+                onChange={setDeviceFilter}
+                options={[
+                  { value: 'all', label: `📱 Tất cả thiết bị ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}` },
+                  ...uniqueDevices.map((d) => ({ value: d, label: `📱 ${d}` })),
+                ]}
+                ariaLabel="Lọc theo thiết bị"
+              />
 
-              <select
+              <CustomSelect
+                className="select-mini"
                 value={userFilter}
-                onChange={(e) => setUserFilter(e.target.value)}
-                className="filter-select-mini"
-                aria-label="Lọc theo người dùng"
-                title="Lọc theo người dùng"
-              >
-                <option value="all">👤 Tất cả user {uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}</option>
-                {uniqueUsers.map((u) => (
-                  <option key={u} value={u}>👤 {u}</option>
-                ))}
-              </select>
+                onChange={setUserFilter}
+                options={[
+                  { value: 'all', label: `👤 Tất cả user ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}` },
+                  ...uniqueUsers.map((u) => ({ value: u, label: `👤 ${u}` })),
+                ]}
+                ariaLabel="Lọc theo người dùng"
+              />
 
               <label className="search-field">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1224,7 +1334,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                         <p>
                           {logs.length === 0
                             ? 'Kết nối client Mobile hoặc Web để theo dõi các lệnh gọi API theo thời gian thực.'
-                            : 'Thử tìm kiếm với từ khóa khác hoặc chuyển tab lọc.'}
+                            : 'Thử tìm kiếm với từ khóa khác hoặc xóa bộ lọc.'}
                         </p>
                       </div>
                     </td>
@@ -1245,8 +1355,8 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                       title="Nhấn để xem chi tiết"
                     >
                       <td className="timestamp-cell" style={{ whiteSpace: 'nowrap', fontSize: '0.78rem', lineHeight: 1.4 }}>
-                        <div>{new Date(log.created_at).toLocaleDateString('vi-VN')}</div>
-                        <div style={{ color: 'var(--text-dim)' }}>{new Date(log.created_at).toLocaleTimeString('vi-VN')}</div>
+                        <div>{formatVietnamDate(log.created_at)}</div>
+                        <div style={{ color: 'var(--text-dim)', fontWeight: 600 }}>{formatVietnamTime(log.created_at)}</div>
                       </td>
                       <td>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.28rem' }}>
@@ -1380,31 +1490,27 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                 </button>
               </div>
 
-              <select
+              <CustomSelect
+                className="select-mini"
                 value={deviceFilter}
-                onChange={(e) => setDeviceFilter(e.target.value)}
-                className="filter-select-mini"
-                aria-label="Lọc theo thiết bị"
-                title="Lọc theo thiết bị"
-              >
-                <option value="all">📱 Tất cả thiết bị {uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}</option>
-                {uniqueDevices.map((d) => (
-                  <option key={d} value={d}>📱 {d}</option>
-                ))}
-              </select>
+                onChange={setDeviceFilter}
+                options={[
+                  { value: 'all', label: `📱 Tất cả thiết bị ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}` },
+                  ...uniqueDevices.map((d) => ({ value: d, label: `📱 ${d}` })),
+                ]}
+                ariaLabel="Lọc theo thiết bị"
+              />
 
-              <select
+              <CustomSelect
+                className="select-mini"
                 value={userFilter}
-                onChange={(e) => setUserFilter(e.target.value)}
-                className="filter-select-mini"
-                aria-label="Lọc theo người dùng"
-                title="Lọc theo người dùng"
-              >
-                <option value="all">👤 Tất cả user {uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}</option>
-                {uniqueUsers.map((u) => (
-                  <option key={u} value={u}>👤 {u}</option>
-                ))}
-              </select>
+                onChange={setUserFilter}
+                options={[
+                  { value: 'all', label: `👤 Tất cả user ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}` },
+                  ...uniqueUsers.map((u) => ({ value: u, label: `👤 ${u}` })),
+                ]}
+                ariaLabel="Lọc theo người dùng"
+              />
 
               <label className="search-field">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1467,8 +1573,8 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                       title="Nhấn để xem chi tiết & Stack Trace"
                     >
                       <td className="timestamp-cell" style={{ whiteSpace: 'nowrap', fontSize: '0.78rem', lineHeight: 1.4 }}>
-                        <div>{new Date(crash.created_at).toLocaleDateString('vi-VN')}</div>
-                        <div style={{ color: 'var(--text-dim)' }}>{new Date(crash.created_at).toLocaleTimeString('vi-VN')}</div>
+                        <div>{formatVietnamDate(crash.created_at)}</div>
+                        <div style={{ color: 'var(--text-dim)', fontWeight: 600 }}>{formatVietnamTime(crash.created_at)}</div>
                       </td>
                       <td>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
@@ -1571,31 +1677,27 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                 </button>
               </div>
 
-              <select
+              <CustomSelect
+                className="select-mini"
                 value={deviceFilter}
-                onChange={(e) => setDeviceFilter(e.target.value)}
-                className="filter-select-mini"
-                aria-label="Lọc theo thiết bị"
-                title="Lọc theo thiết bị"
-              >
-                <option value="all">📱 Tất cả thiết bị {uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}</option>
-                {uniqueDevices.map((d) => (
-                  <option key={d} value={d}>📱 {d}</option>
-                ))}
-              </select>
+                onChange={setDeviceFilter}
+                options={[
+                  { value: 'all', label: `📱 Tất cả thiết bị ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}` },
+                  ...uniqueDevices.map((d) => ({ value: d, label: `📱 ${d}` })),
+                ]}
+                ariaLabel="Lọc theo thiết bị"
+              />
 
-              <select
+              <CustomSelect
+                className="select-mini"
                 value={userFilter}
-                onChange={(e) => setUserFilter(e.target.value)}
-                className="filter-select-mini"
-                aria-label="Lọc theo người dùng"
-                title="Lọc theo người dùng"
-              >
-                <option value="all">👤 Tất cả user {uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}</option>
-                {uniqueUsers.map((u) => (
-                  <option key={u} value={u}>👤 {u}</option>
-                ))}
-              </select>
+                onChange={setUserFilter}
+                options={[
+                  { value: 'all', label: `👤 Tất cả user ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}` },
+                  ...uniqueUsers.map((u) => ({ value: u, label: `👤 ${u}` })),
+                ]}
+                ariaLabel="Lọc theo người dùng"
+              />
 
               <label className="search-field">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1658,8 +1760,8 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                       title="Nhấn để xem chi tiết tham số"
                     >
                       <td className="timestamp-cell" style={{ whiteSpace: 'nowrap', fontSize: '0.78rem', lineHeight: 1.4 }}>
-                        <div>{new Date(event.created_at).toLocaleDateString('vi-VN')}</div>
-                        <div style={{ color: 'var(--text-dim)' }}>{new Date(event.created_at).toLocaleTimeString('vi-VN')}</div>
+                        <div>{formatVietnamDate(event.created_at)}</div>
+                        <div style={{ color: 'var(--text-dim)', fontWeight: 600 }}>{formatVietnamTime(event.created_at)}</div>
                       </td>
                       <td>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
