@@ -694,7 +694,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
             <option value="all">🌐 Toàn bộ hệ thống (Tất cả telemetry)</option>
             {usersList.filter((u) => u.job_name).map((u) => (
               <option key={u.id} value={u.id}>
-                {u.job_type === 'app' ? '📱' : '🌐'} {u.name} — {u.job_name} ({u.app_identifier})
+                {u.job_type === 'app' ? '📱' : '🌐'} {u.job_name} ({u.app_identifier})
               </option>
             ))}
           </select>
