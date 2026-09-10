@@ -65,13 +65,12 @@ function CustomSelect({
       if (event.key === 'Escape') setIsOpen(false);
     }
     if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-      document.addEventListener('touchstart', handleClickOutside);
+      // Dùng pointerdown thay cho mousedown để tương thích tối đa với WinForms WebView2
+      document.addEventListener('pointerdown', handleClickOutside);
       document.addEventListener('keydown', handleKeyDown);
     }
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('touchstart', handleClickOutside);
+      document.removeEventListener('pointerdown', handleClickOutside);
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [isOpen]);
@@ -83,7 +82,10 @@ function CustomSelect({
       <button
         type="button"
         className="custom-select-trigger"
-        onClick={() => setIsOpen((prev) => !prev)}
+        onClick={(e) => {
+          e.stopPropagation();
+          setIsOpen((prev) => !prev);
+        }}
         aria-expanded={isOpen}
         aria-label={ariaLabel}
       >
@@ -95,24 +97,39 @@ function CustomSelect({
 
       {isOpen && (
         <div className={`custom-select-menu ${alignRight ? 'align-right' : ''}`} role="listbox">
-          {options.map((opt) => {
-            const isSelected = String(opt.value) === String(value);
-            return (
-              <button
-                key={String(opt.value)}
-                type="button"
-                role="option"
-                aria-selected={isSelected}
-                className={`custom-select-option ${isSelected ? 'selected' : ''}`}
-                onClick={() => {
-                  onChange(opt.value);
-                  setIsOpen(false);
-                }}
-              >
-                {opt.label}
-              </button>
-            );
-          })}
+          {options.length === 0 ? (
+            <div style={{ padding: '0.45rem 0.65rem', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+              Không có lựa chọn
+            </div>
+          ) : (
+            options.map((opt) => {
+              const isSelected = String(opt.value) === String(value);
+              return (
+                <button
+                  key={String(opt.value)}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  className={`custom-select-option ${isSelected ? 'selected' : ''}`}
+                  onMouseDown={(e) => {
+                    // Xử lý trực tiếp trên MouseDown để ngăn chặn race-condition với document click
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onChange(opt.value);
+                    setIsOpen(false);
+                  }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onChange(opt.value);
+                    setIsOpen(false);
+                  }}
+                >
+                  {opt.label}
+                </button>
+              );
+            })
+          )}
         </div>
       )}
     </div>
@@ -263,6 +280,7 @@ function Dashboard() {
   const [setupTab, setSetupTab] = useState('crashlytics');
 
   // User & Job Filtering State
+  const [filterMeta, setFilterMeta] = useState({ apps: [], devices: [], users: [] });
   const [usersList, setUsersList] = useState([]);
   const [selectedFilter, setSelectedFilter] = useState(userIdFromUrl || 'all');
   const [deviceFilter, setDeviceFilter] = useState('all');
@@ -297,14 +315,41 @@ function Dashboard() {
     }
   };
 
-  const fetchAllTelemetry = async (overrideFilter) => {
+  const fetchFilterMetadata = async () => {
     try {
-      // Đảm bảo usersList luôn được nạp lại nếu trước đó WebView kết nối trễ
+      const response = await fetch(`${API_MONITOR_URL}/telemetry/filters`, {
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data && typeof data === 'object') {
+          setFilterMeta({
+            apps: Array.isArray(data.apps) ? data.apps : [],
+            devices: Array.isArray(data.devices) ? data.devices : [],
+            users: Array.isArray(data.users) ? data.users : [],
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('Lỗi tải /telemetry/filters:', err);
+    }
+  };
+
+  const fetchAllTelemetry = async (overrideFilter, overrideDevice, overrideUser) => {
+    try {
+      // Đảm bảo usersList và filter metadata luôn được nạp lại nếu trước đó WebView kết nối trễ
       if (usersList.length === 0) {
         fetchUsers();
       }
+      if (!filterMeta.apps || filterMeta.apps.length === 0) {
+        fetchFilterMetadata();
+      }
 
       const activeUser = overrideFilter !== undefined ? overrideFilter : selectedFilter;
+      const activeDevice = overrideDevice !== undefined ? overrideDevice : deviceFilter;
+      const activeUserName = overrideUser !== undefined ? overrideUser : userFilter;
+
       const queryParts = [];
 
       if (activeUser && activeUser !== 'all') {
@@ -314,6 +359,13 @@ function Dashboard() {
           queryParts.push(`app_identifier=${encodeURIComponent(activeUser)}`);
         }
       }
+      if (activeDevice && activeDevice !== 'all') {
+        queryParts.push(`device=${encodeURIComponent(activeDevice)}`);
+      }
+      if (activeUserName && activeUserName !== 'all') {
+        queryParts.push(`user=${encodeURIComponent(activeUserName)}`);
+      }
+
       const queryString = queryParts.length > 0 ? `?${queryParts.join('&')}` : '';
 
       const fetchOptions = { cache: 'no-store' };
@@ -351,6 +403,7 @@ function Dashboard() {
 
   useEffect(() => {
     fetchUsers();
+    fetchFilterMetadata();
   }, []);
 
   // Update when URL params change
@@ -376,7 +429,91 @@ function Dashboard() {
     }, refreshInterval);
 
     return () => window.clearInterval(interval);
-  }, [selectedFilter, refreshInterval]);
+  }, [selectedFilter, deviceFilter, userFilter, refreshInterval]);
+
+  const handleFilterChange = (val) => {
+    setSelectedFilter(val);
+    if (val === 'all') {
+      setSearchParams({});
+      fetchAllTelemetry('all', deviceFilter, userFilter);
+    } else {
+      setSearchParams({ user_id: val });
+      fetchAllTelemetry(val, deviceFilter, userFilter);
+    }
+  };
+
+  const handleDeviceChange = (val) => {
+    setDeviceFilter(val);
+    fetchAllTelemetry(selectedFilter, val, userFilter);
+  };
+
+  const handleUserChange = (val) => {
+    setUserFilter(val);
+    fetchAllTelemetry(selectedFilter, deviceFilter, val);
+  };
+
+  // WinForms WebView2 Interop Bridge
+  useEffect(() => {
+    window.flowApi = {
+      setFilter: (val) => handleFilterChange(val),
+      setDevice: (d) => handleDeviceChange(d),
+      setUser: (u) => handleUserChange(u),
+      refresh: () => fetchAllTelemetry(),
+      getFilterState: () => ({
+        selectedFilter,
+        deviceFilter,
+        userFilter,
+        telemetryMode,
+      }),
+    };
+
+    const handleWebViewMessage = (event) => {
+      try {
+        const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+        if (!data || typeof data !== 'object') return;
+
+        if (data.action === 'setFilter' && data.value !== undefined) {
+          handleFilterChange(data.value);
+        } else if (data.action === 'setDevice' && data.value !== undefined) {
+          handleDeviceChange(data.value);
+        } else if (data.action === 'setUser' && data.value !== undefined) {
+          handleUserChange(data.value);
+        } else if (data.action === 'refresh') {
+          fetchAllTelemetry();
+        }
+      } catch (err) {
+        console.warn('WinForms message parse error:', err);
+      }
+    };
+
+    if (typeof window !== 'undefined' && window.chrome && window.chrome.webview) {
+      window.chrome.webview.addEventListener('message', handleWebViewMessage);
+      try {
+        window.chrome.webview.postMessage({ type: 'FLOW_API_READY' });
+      } catch (_) {}
+    }
+
+    return () => {
+      if (typeof window !== 'undefined' && window.chrome && window.chrome.webview) {
+        window.chrome.webview.removeEventListener('message', handleWebViewMessage);
+      }
+      delete window.flowApi;
+    };
+  }, [selectedFilter, deviceFilter, userFilter, telemetryMode]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.chrome && window.chrome.webview) {
+      try {
+        window.chrome.webview.postMessage({
+          type: 'FILTER_CHANGED',
+          selectedFilter,
+          deviceFilter,
+          userFilter,
+          telemetryMode,
+        });
+      } catch (_) {}
+    }
+  }, [selectedFilter, deviceFilter, userFilter, telemetryMode]);
 
   // Reset trang về 1 khi đổi bộ lọc hoặc từ khóa tìm kiếm
   useEffect(() => {
@@ -385,11 +522,11 @@ function Dashboard() {
 
   useEffect(() => {
     setCrashPage(1);
-  }, [crashTab, searchTerm, selectedFilter]);
+  }, [crashTab, searchTerm, selectedFilter, deviceFilter, userFilter]);
 
   useEffect(() => {
     setEventPage(1);
-  }, [eventTab, searchTerm, selectedFilter]);
+  }, [eventTab, searchTerm, selectedFilter, deviceFilter, userFilter]);
 
   // Escape to close any open modal
   useEffect(() => {
@@ -413,23 +550,31 @@ function Dashboard() {
     };
   }, [selectedLog, selectedCrash, selectedEvent]);
 
-  const handleFilterChange = (val) => {
-    setSelectedFilter(val);
-    if (val === 'all') {
-      setSearchParams({});
-      fetchAllTelemetry('all');
-    } else {
-      setSearchParams({ user_id: val });
-      fetchAllTelemetry(val);
-    }
-  };
-
-  // Danh sách App / Job khả dụng để lọc - tự động kết hợp từ /users API VÀ từ dữ liệu telemetry
+  // Danh sách App / Job khả dụng để lọc - tự động kết hợp từ /telemetry/filters VÀ từ /users API VÀ telemetry
   // Giúp dropdown KHÔNG BAO GIỜ bị rỗng kể cả khi chạy webview WinForms bị nghẽn mạng ban đầu!
   const availableJobs = useMemo(() => {
     const list = [];
     const seen = new Set();
 
+    // 1. Nạp từ metadata API /telemetry/filters
+    if (Array.isArray(filterMeta.apps) && filterMeta.apps.length > 0) {
+      filterMeta.apps.forEach((app) => {
+        const key = app.app_identifier || app.id;
+        if (key && !seen.has(key)) {
+          seen.add(key);
+          list.push({
+            id: String(app.id),
+            filterValue: String(app.filterValue || app.id),
+            job_name: app.job_name || app.name,
+            app_identifier: app.app_identifier || '',
+            job_type: app.job_type || 'app',
+            name: app.user_name || app.name || 'Hệ thống',
+          });
+        }
+      });
+    }
+
+    // 2. Dự phòng thêm từ /users API
     if (Array.isArray(usersList)) {
       usersList.forEach((u) => {
         if (u && (u.job_name || u.app_identifier)) {
@@ -449,7 +594,7 @@ function Dashboard() {
       });
     }
 
-    // Dự phòng khi usersList chưa tải xong hoặc mạng WebView bị nghẽn
+    // 3. Dự phòng thêm khi usersList chưa tải xong hoặc mạng WebView bị nghẽn
     const scanItems = [...logs, ...crashes, ...events];
     scanItems.forEach((item) => {
       const appId = item.app_identifier;
@@ -467,7 +612,7 @@ function Dashboard() {
     });
 
     return list;
-  }, [usersList, logs, crashes, events]);
+  }, [filterMeta.apps, usersList, logs, crashes, events]);
 
   const activeUserJob = useMemo(() => {
     if (!selectedFilter || selectedFilter === 'all') return null;
@@ -660,9 +805,12 @@ const res = await monitoredFetch('https://api.example.com/data');`;
   const customEventCount = totalEvents - screenViewCount;
   const uniqueUsersCount = new Set(events.map((e) => e.user_id).filter(Boolean)).size;
 
-  // Unique devices and users for quick filtering - tổng hợp từ tất cả logs, crashes và events
+  // Unique devices and users for quick filtering - tổng hợp từ server API và toàn bộ telemetry
   const uniqueDevices = useMemo(() => {
     const set = new Set();
+    if (Array.isArray(filterMeta.devices)) {
+      filterMeta.devices.forEach((d) => { if (d) set.add(d); });
+    }
     logs.forEach((l) => { if (l.device_name) set.add(l.device_name); });
     crashes.forEach((c) => {
       if (c.device_info) {
@@ -686,19 +834,22 @@ const res = await monitoredFetch('https://api.example.com/data');`;
         }
       }
     });
-    return Array.from(set).filter(Boolean);
-  }, [logs, crashes, events]);
+    return Array.from(set).filter(Boolean).sort();
+  }, [filterMeta.devices, logs, crashes, events]);
 
   const uniqueUsers = useMemo(() => {
     const set = new Set();
+    if (Array.isArray(filterMeta.users)) {
+      filterMeta.users.forEach((u) => { if (u) set.add(u); });
+    }
     logs.forEach((l) => { if (l.user_name) set.add(l.user_name); });
     crashes.forEach((c) => { if (c.user_name) set.add(c.user_name); });
     events.forEach((e) => {
       if (e.user_name) set.add(e.user_name);
       else if (e.user_id) set.add(e.user_id);
     });
-    return Array.from(set).filter(Boolean);
-  }, [logs, crashes, events]);
+    return Array.from(set).filter(Boolean).sort();
+  }, [filterMeta.users, logs, crashes, events]);
 
   // Filter and search Logs
   const filteredLogs = useMemo(() => {
@@ -1265,7 +1416,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
               <CustomSelect
                 className="select-mini"
                 value={deviceFilter}
-                onChange={setDeviceFilter}
+                onChange={handleDeviceChange}
                 options={[
                   { value: 'all', label: `📱 Tất cả thiết bị ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}` },
                   ...uniqueDevices.map((d) => ({ value: d, label: `📱 ${d}` })),
@@ -1276,7 +1427,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
               <CustomSelect
                 className="select-mini"
                 value={userFilter}
-                onChange={setUserFilter}
+                onChange={handleUserChange}
                 options={[
                   { value: 'all', label: `👤 Tất cả user ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}` },
                   ...uniqueUsers.map((u) => ({ value: u, label: `👤 ${u}` })),
@@ -1493,7 +1644,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
               <CustomSelect
                 className="select-mini"
                 value={deviceFilter}
-                onChange={setDeviceFilter}
+                onChange={handleDeviceChange}
                 options={[
                   { value: 'all', label: `📱 Tất cả thiết bị ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}` },
                   ...uniqueDevices.map((d) => ({ value: d, label: `📱 ${d}` })),
@@ -1504,7 +1655,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
               <CustomSelect
                 className="select-mini"
                 value={userFilter}
-                onChange={setUserFilter}
+                onChange={handleUserChange}
                 options={[
                   { value: 'all', label: `👤 Tất cả user ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}` },
                   ...uniqueUsers.map((u) => ({ value: u, label: `👤 ${u}` })),
@@ -1680,7 +1831,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
               <CustomSelect
                 className="select-mini"
                 value={deviceFilter}
-                onChange={setDeviceFilter}
+                onChange={handleDeviceChange}
                 options={[
                   { value: 'all', label: `📱 Tất cả thiết bị ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}` },
                   ...uniqueDevices.map((d) => ({ value: d, label: `📱 ${d}` })),
@@ -1691,7 +1842,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
               <CustomSelect
                 className="select-mini"
                 value={userFilter}
-                onChange={setUserFilter}
+                onChange={handleUserChange}
                 options={[
                   { value: 'all', label: `👤 Tất cả user ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}` },
                   ...uniqueUsers.map((u) => ({ value: u, label: `👤 ${u}` })),

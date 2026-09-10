@@ -679,7 +679,7 @@ input:focus-visible {
 
 .log-panel {
   margin-top: 20px;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
@@ -1733,8 +1733,8 @@ tbody tr.row-error:hover {
   background: #0d151f;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.75);
-  z-index: 9999;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.9);
+  z-index: 99999;
   padding: 0.35rem;
   display: flex;
   flex-direction: column;

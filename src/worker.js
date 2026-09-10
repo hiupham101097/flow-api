@@ -116,9 +116,116 @@ export default {
       path.startsWith('/users') || 
       path.startsWith('/jobs') ||
       path.startsWith('/crashes') ||
-      path.startsWith('/events')
+      path.startsWith('/events') ||
+      path.startsWith('/telemetry/filters')
     ) {
       await ensureSchema(env.DB);
+    }
+
+    // ==========================================
+    // 0. API TELEMETRY METADATA FILTERS: /telemetry/filters
+    // ==========================================
+    if (path === '/telemetry/filters' && request.method === 'GET') {
+      try {
+        // 1. Lấy danh sách Jobs/Apps đã đăng ký kèm chủ sở hữu
+        const { results: registeredJobs } = await env.DB.prepare(`
+          SELECT 
+            j.id as job_id,
+            j.name as job_name,
+            j.type as job_type,
+            j.app_identifier,
+            u.id as user_id,
+            u.name as user_name
+          FROM jobs j
+          LEFT JOIN users u ON j.user_id = u.id
+          ORDER BY j.created_at DESC
+        `).all();
+
+        // 2. Lấy các app_identifier độc nhất xuất hiện trong logs/crashes/events
+        const [logsApps, crashesApps, eventsApps] = await Promise.all([
+          env.DB.prepare('SELECT DISTINCT app_identifier FROM api_logs WHERE app_identifier IS NOT NULL AND app_identifier != "" LIMIT 150').all(),
+          env.DB.prepare('SELECT DISTINCT app_identifier FROM app_crashes WHERE app_identifier IS NOT NULL AND app_identifier != "" LIMIT 150').all(),
+          env.DB.prepare('SELECT DISTINCT app_identifier FROM app_events WHERE app_identifier IS NOT NULL AND app_identifier != "" LIMIT 150').all(),
+        ]);
+
+        const appsMap = new Map();
+        (registeredJobs || []).forEach((j) => {
+          if (j.app_identifier) {
+            appsMap.set(j.app_identifier, {
+              id: String(j.user_id || j.job_id || j.app_identifier),
+              filterValue: String(j.user_id || j.app_identifier),
+              job_name: j.job_name || j.app_identifier,
+              app_identifier: j.app_identifier,
+              job_type: j.job_type || 'app',
+              user_name: j.user_name || 'Hệ thống',
+            });
+          }
+        });
+
+        // Ghép thêm các App ID chỉ xuất hiện trong telemetry
+        const scanAppIds = new Set([
+          ...(logsApps.results || []).map((r) => r.app_identifier),
+          ...(crashesApps.results || []).map((r) => r.app_identifier),
+          ...(eventsApps.results || []).map((r) => r.app_identifier),
+        ]);
+
+        scanAppIds.forEach((appId) => {
+          if (appId && !appsMap.has(appId)) {
+            appsMap.set(appId, {
+              id: appId,
+              filterValue: appId,
+              job_name: appId,
+              app_identifier: appId,
+              job_type: 'app',
+              user_name: 'Telemetry App',
+            });
+          }
+        });
+
+        // 3. Lấy danh sách Thiết bị (Devices) từ api_logs, app_crashes, app_events
+        const [logsDevices, crashesDevices, eventsDevices] = await Promise.all([
+          env.DB.prepare('SELECT DISTINCT device_name FROM api_logs WHERE device_name IS NOT NULL AND device_name != "" LIMIT 150').all(),
+          env.DB.prepare('SELECT DISTINCT device_info FROM app_crashes WHERE device_info IS NOT NULL AND device_info != "" LIMIT 150').all(),
+          env.DB.prepare('SELECT DISTINCT device_info FROM app_events WHERE device_info IS NOT NULL AND device_info != "" LIMIT 150').all(),
+        ]);
+
+        const deviceSet = new Set();
+        (logsDevices.results || []).forEach((r) => {
+          if (r.device_name) deviceSet.add(r.device_name.trim());
+        });
+
+        [...(crashesDevices.results || []), ...(eventsDevices.results || [])].forEach((r) => {
+          if (!r.device_info) return;
+          try {
+            const parsed = JSON.parse(r.device_info);
+            const dev = parsed.device_name || parsed.model || parsed.name || parsed.device || parsed.os;
+            if (dev) deviceSet.add(String(dev).trim());
+            else if (typeof r.device_info === 'string') deviceSet.add(r.device_info.trim().slice(0, 50));
+          } catch {
+            if (typeof r.device_info === 'string') deviceSet.add(r.device_info.trim().slice(0, 50));
+          }
+        });
+
+        // 4. Lấy danh sách Người dùng (Users)
+        const [logsUsers, eventsUsers, regUsers] = await Promise.all([
+          env.DB.prepare('SELECT DISTINCT user_name FROM api_logs WHERE user_name IS NOT NULL AND user_name != "" LIMIT 150').all(),
+          env.DB.prepare('SELECT DISTINCT user_id FROM app_events WHERE user_id IS NOT NULL AND user_id != "" LIMIT 150').all(),
+          env.DB.prepare('SELECT name FROM users LIMIT 150').all(),
+        ]);
+
+        const userSet = new Set();
+        (logsUsers.results || []).forEach((r) => { if (r.user_name) userSet.add(r.user_name.trim()); });
+        (eventsUsers.results || []).forEach((r) => { if (r.user_id) userSet.add(r.user_id.trim()); });
+        (regUsers.results || []).forEach((r) => { if (r.name) userSet.add(r.name.trim()); });
+
+        return jsonResponse({
+          apps: Array.from(appsMap.values()),
+          devices: Array.from(deviceSet).filter(Boolean).sort(),
+          users: Array.from(userSet).filter(Boolean).sort(),
+        });
+      } catch (e) {
+        return jsonResponse({ error: e.message, apps: [], devices: [], users: [] }, 500);
+      }
     }
 
     // ==========================================
@@ -501,6 +608,8 @@ export default {
         const userId = url.searchParams.get('user_id');
         const appIdentifier = url.searchParams.get('app_identifier') || url.searchParams.get('app_id');
         const isFatal = url.searchParams.get('is_fatal');
+        const deviceParam = url.searchParams.get('device');
+        const userParam = url.searchParams.get('user');
         const limit = Math.min(Number(url.searchParams.get('limit')) || 100, 500);
 
         let query = `
@@ -533,6 +642,14 @@ export default {
         if (isFatal !== null && isFatal !== undefined && isFatal !== '') {
           query += ' AND c.is_fatal = ?';
           params.push(Number(isFatal));
+        }
+        if (deviceParam) {
+          query += ' AND c.device_info LIKE ?';
+          params.push(`%${deviceParam}%`);
+        }
+        if (userParam) {
+          query += ' AND (u.name LIKE ? OR c.custom_attributes LIKE ?)';
+          params.push(`%${userParam}%`, `%${userParam}%`);
         }
 
         query += ' ORDER BY c.created_at DESC LIMIT ?';
@@ -616,6 +733,8 @@ export default {
         const appIdentifier = url.searchParams.get('app_identifier') || url.searchParams.get('app_id');
         const eventName = url.searchParams.get('event_name');
         const eventType = url.searchParams.get('event_type');
+        const deviceParam = url.searchParams.get('device');
+        const userParam = url.searchParams.get('user');
         const limit = Math.min(Number(url.searchParams.get('limit')) || 150, 500);
 
         let query = `
@@ -652,6 +771,14 @@ export default {
         if (eventType) {
           query += ' AND e.event_type = ?';
           params.push(eventType);
+        }
+        if (deviceParam) {
+          query += ' AND e.device_info LIKE ?';
+          params.push(`%${deviceParam}%`);
+        }
+        if (userParam) {
+          query += ' AND (e.user_id LIKE ? OR u.name LIKE ?)';
+          params.push(`%${userParam}%`, `%${userParam}%`);
         }
 
         query += ' ORDER BY e.created_at DESC LIMIT ?';
