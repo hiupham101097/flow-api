@@ -97,9 +97,6 @@ CREATE INDEX IF NOT EXISTS idx_crashes_app_id_desc ON app_crashes(app_identifier
 CREATE INDEX IF NOT EXISTS idx_events_app_id_desc ON app_events(app_identifier, id DESC);
 CREATE INDEX IF NOT EXISTS idx_events_name_created ON app_events(event_name, created_at DESC);
 
--- Cột định danh người dùng / thiết bị cho sự kiện (app đã gửi từ lâu)
-ALTER TABLE app_events ADD COLUMN user_name TEXT;
-ALTER TABLE app_events ADD COLUMN device_name TEXT;
 
 -- Định nghĩa luồng sự kiện cần thống kê (ví dụ: eKYB)
 CREATE TABLE IF NOT EXISTS event_funnels (
@@ -134,3 +131,11 @@ CREATE TABLE IF NOT EXISTS event_funnel_daily (
 );
 
 CREATE INDEX IF NOT EXISTS idx_funnel_daily_lookup ON event_funnel_daily(funnel_key, day);
+
+-- ĐẶT CUỐI FILE CÓ CHỦ ĐÍCH: SQLite không có ADD COLUMN IF NOT EXISTS, nên hai
+-- lệnh này sẽ báo "duplicate column name" nếu chạy file lần thứ hai. wrangler
+-- d1 execute dừng ngay ở lỗi đầu tiên, nên phải để chúng sau mọi CREATE để lần
+-- chạy lại vẫn tạo đủ bảng rồi mới dừng. Lỗi ở đây là vô hại, bỏ qua được.
+-- (Worker cũng tự thêm hai cột này trong ensureSchema, có bọc try/catch.)
+ALTER TABLE app_events ADD COLUMN user_name TEXT;
+ALTER TABLE app_events ADD COLUMN device_name TEXT;
