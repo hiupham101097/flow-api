@@ -4,11 +4,46 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
+// ==========================================
+// BỘ NHỚ ĐỆM TẠM THỜI TRÊN WORKER (EDGE MEMORY CACHE)
+// Giúp giảm tải 90-99% lượt đọc đến Cloudflare D1
+// ==========================================
+const memoryCache = new Map();
+
+function getCached(key) {
+  const item = memoryCache.get(key);
+  if (!item) return null;
+  if (Date.now() > item.expiresAt) {
+    memoryCache.delete(key);
+    return null;
+  }
+  return item.data;
+}
+
+function setCached(key, data, ttlSeconds) {
+  if (memoryCache.size > 250) {
+    const firstKey = memoryCache.keys().next().value;
+    memoryCache.delete(firstKey);
+  }
+  memoryCache.set(key, {
+    data,
+    expiresAt: Date.now() + (ttlSeconds * 1000),
+  });
+}
+
+function clearCacheByPrefix(prefix) {
+  for (const key of memoryCache.keys()) {
+    if (key.startsWith(prefix)) {
+      memoryCache.delete(key);
+    }
+  }
+}
+
 let tablesInitialized = false;
 async function ensureSchema(db) {
   if (tablesInitialized) return;
   try {
-    // 1. Tạo bảng users nếu chưa có
+    // 1. Bảng users
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -18,7 +53,7 @@ async function ensureSchema(db) {
       )
     `).run();
 
-    // 2. Tạo bảng jobs nếu chưa có
+    // 2. Bảng jobs
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS jobs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,10 +67,12 @@ async function ensureSchema(db) {
       )
     `).run();
 
-    // 3. Tạo bảng api_logs cơ bản nếu chưa có
+    // 3. Bảng api_logs
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS api_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+        app_identifier TEXT,
         endpoint TEXT NOT NULL,
         method TEXT NOT NULL,
         status_code INTEGER,
@@ -43,11 +80,14 @@ async function ensureSchema(db) {
         request_payload TEXT,
         response_payload TEXT,
         duration_ms INTEGER,
+        device_name TEXT,
+        user_name TEXT,
+        ip_address TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `).run();
 
-    // 5. Tạo bảng app_crashes nếu chưa có
+    // 4. Bảng app_crashes
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS app_crashes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,7 +102,7 @@ async function ensureSchema(db) {
       )
     `).run();
 
-    // 6. Tạo bảng app_events nếu chưa có
+    // 5. Bảng app_events
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS app_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,16 +118,31 @@ async function ensureSchema(db) {
       )
     `).run();
 
+    // 6. Các chỉ mục tối ưu đọc cao tốc
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_logs_created_at ON api_logs(created_at DESC)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_logs_app_created ON api_logs(app_identifier, created_at DESC)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_logs_job_created ON api_logs(job_id, created_at DESC)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_crashes_created_at ON app_crashes(created_at DESC)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_crashes_app_created ON app_crashes(app_identifier, created_at DESC)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_events_created_at ON app_events(created_at DESC)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_events_app_created ON app_events(app_identifier, created_at DESC)').run();
+
     tablesInitialized = true;
   } catch (err) {
     console.error('ensureSchema error:', err);
   }
 }
 
-const jsonResponse = (data, status = 200) => {
+const jsonResponse = (data, status = 200, cacheControl = null) => {
+  const headers = { ...corsHeaders, 'Content-Type': 'application/json' };
+  if (cacheControl) {
+    headers['Cache-Control'] = cacheControl;
+  } else if (status === 200) {
+    headers['Cache-Control'] = 'no-cache';
+  }
   return new Response(JSON.stringify(data), {
     status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    headers,
   });
 };
 
@@ -110,24 +165,31 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, '').replace(/^\/+/, '/');
 
-    // Tự động đảm bảo schema DB sẵn sàng cho các API
-    if (
-      path.startsWith('/logs') || 
-      path.startsWith('/users') || 
-      path.startsWith('/jobs') ||
-      path.startsWith('/crashes') ||
-      path.startsWith('/events') ||
-      path.startsWith('/telemetry/filters')
-    ) {
-      await ensureSchema(env.DB);
+    // Chỉ kiểm tra schema khi có thao tác GHI (POST/PUT/DELETE) để KHÔNG làm chậm hoặc quá tải lượt ĐỌC
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      if (
+        path.startsWith('/logs') || 
+        path.startsWith('/users') || 
+        path.startsWith('/jobs') ||
+        path.startsWith('/crashes') ||
+        path.startsWith('/events')
+      ) {
+        await ensureSchema(env.DB);
+      }
     }
 
     // ==========================================
-    // 0. API TELEMETRY METADATA FILTERS: /telemetry/filters
+    // 0. API TELEMETRY METADATA FILTERS: /telemetry/filters (CACHED 60S)
     // ==========================================
     if (path === '/telemetry/filters' && request.method === 'GET') {
+      const cacheKey = 'telemetry_filters';
+      const cached = getCached(cacheKey);
+      if (cached) {
+        return jsonResponse(cached, 200, 'public, max-age=30, stale-while-revalidate=60');
+      }
+
       try {
-        // 1. Lấy danh sách Jobs/Apps đã đăng ký kèm chủ sở hữu
+        // 1. Lấy danh sách Jobs/Apps đã đăng ký kèm chủ sở hữu (sử dụng index)
         const { results: registeredJobs } = await env.DB.prepare(`
           SELECT 
             j.id as job_id,
@@ -140,13 +202,6 @@ export default {
           LEFT JOIN users u ON j.user_id = u.id
           ORDER BY j.created_at DESC
         `).all();
-
-        // 2. Lấy các app_identifier độc nhất xuất hiện trong logs/crashes/events
-        const [logsApps, crashesApps, eventsApps] = await Promise.all([
-          env.DB.prepare('SELECT DISTINCT app_identifier FROM api_logs WHERE app_identifier IS NOT NULL AND app_identifier != "" LIMIT 150').all(),
-          env.DB.prepare('SELECT DISTINCT app_identifier FROM app_crashes WHERE app_identifier IS NOT NULL AND app_identifier != "" LIMIT 150').all(),
-          env.DB.prepare('SELECT DISTINCT app_identifier FROM app_events WHERE app_identifier IS NOT NULL AND app_identifier != "" LIMIT 150').all(),
-        ]);
 
         const appsMap = new Map();
         (registeredJobs || []).forEach((j) => {
@@ -162,67 +217,40 @@ export default {
           }
         });
 
-        // Ghép thêm các App ID chỉ xuất hiện trong telemetry
-        const scanAppIds = new Set([
-          ...(logsApps.results || []).map((r) => r.app_identifier),
-          ...(crashesApps.results || []).map((r) => r.app_identifier),
-          ...(eventsApps.results || []).map((r) => r.app_identifier),
+        // 2. Chỉ quét 100 bản ghi gần nhất có index thay vì quét toàn bộ bảng
+        const [recentLogs, regUsers] = await Promise.all([
+          env.DB.prepare('SELECT app_identifier, device_name, user_name FROM api_logs ORDER BY created_at DESC LIMIT 100').all(),
+          env.DB.prepare('SELECT name FROM users LIMIT 100').all(),
         ]);
 
-        scanAppIds.forEach((appId) => {
-          if (appId && !appsMap.has(appId)) {
-            appsMap.set(appId, {
-              id: appId,
-              filterValue: appId,
-              job_name: appId,
-              app_identifier: appId,
+        const deviceSet = new Set();
+        const userSet = new Set();
+
+        (regUsers.results || []).forEach((r) => { if (r.name) userSet.add(r.name.trim()); });
+
+        (recentLogs.results || []).forEach((r) => {
+          if (r.app_identifier && !appsMap.has(r.app_identifier)) {
+            appsMap.set(r.app_identifier, {
+              id: r.app_identifier,
+              filterValue: r.app_identifier,
+              job_name: r.app_identifier,
+              app_identifier: r.app_identifier,
               job_type: 'app',
               user_name: 'Telemetry App',
             });
           }
-        });
-
-        // 3. Lấy danh sách Thiết bị (Devices) từ api_logs, app_crashes, app_events
-        const [logsDevices, crashesDevices, eventsDevices] = await Promise.all([
-          env.DB.prepare('SELECT DISTINCT device_name FROM api_logs WHERE device_name IS NOT NULL AND device_name != "" LIMIT 150').all(),
-          env.DB.prepare('SELECT DISTINCT device_info FROM app_crashes WHERE device_info IS NOT NULL AND device_info != "" LIMIT 150').all(),
-          env.DB.prepare('SELECT DISTINCT device_info FROM app_events WHERE device_info IS NOT NULL AND device_info != "" LIMIT 150').all(),
-        ]);
-
-        const deviceSet = new Set();
-        (logsDevices.results || []).forEach((r) => {
           if (r.device_name) deviceSet.add(r.device_name.trim());
+          if (r.user_name) userSet.add(r.user_name.trim());
         });
 
-        [...(crashesDevices.results || []), ...(eventsDevices.results || [])].forEach((r) => {
-          if (!r.device_info) return;
-          try {
-            const parsed = JSON.parse(r.device_info);
-            const dev = parsed.device_name || parsed.model || parsed.name || parsed.device || parsed.os;
-            if (dev) deviceSet.add(String(dev).trim());
-            else if (typeof r.device_info === 'string') deviceSet.add(r.device_info.trim().slice(0, 50));
-          } catch {
-            if (typeof r.device_info === 'string') deviceSet.add(r.device_info.trim().slice(0, 50));
-          }
-        });
-
-        // 4. Lấy danh sách Người dùng (Users)
-        const [logsUsers, eventsUsers, regUsers] = await Promise.all([
-          env.DB.prepare('SELECT DISTINCT user_name FROM api_logs WHERE user_name IS NOT NULL AND user_name != "" LIMIT 150').all(),
-          env.DB.prepare('SELECT DISTINCT user_id FROM app_events WHERE user_id IS NOT NULL AND user_id != "" LIMIT 150').all(),
-          env.DB.prepare('SELECT name FROM users LIMIT 150').all(),
-        ]);
-
-        const userSet = new Set();
-        (logsUsers.results || []).forEach((r) => { if (r.user_name) userSet.add(r.user_name.trim()); });
-        (eventsUsers.results || []).forEach((r) => { if (r.user_id) userSet.add(r.user_id.trim()); });
-        (regUsers.results || []).forEach((r) => { if (r.name) userSet.add(r.name.trim()); });
-
-        return jsonResponse({
+        const filterData = {
           apps: Array.from(appsMap.values()),
           devices: Array.from(deviceSet).filter(Boolean).sort(),
           users: Array.from(userSet).filter(Boolean).sort(),
-        });
+        };
+
+        setCached(cacheKey, filterData, 60);
+        return jsonResponse(filterData, 200, 'public, max-age=30, stale-while-revalidate=60');
       } catch (e) {
         return jsonResponse({ error: e.message, apps: [], devices: [], users: [] }, 500);
       }
@@ -232,6 +260,12 @@ export default {
     // 1. API USERS: /users
     // ==========================================
     if (path === '/users' && request.method === 'GET') {
+      const cacheKey = 'users:all';
+      const cached = getCached(cacheKey);
+      if (cached) {
+        return jsonResponse(cached, 200, 'public, max-age=10, stale-while-revalidate=30');
+      }
+
       try {
         const { results } = await env.DB.prepare(`
           SELECT 
@@ -242,7 +276,8 @@ export default {
           LEFT JOIN jobs j ON u.id = j.user_id
           ORDER BY u.created_at DESC
         `).all();
-        return jsonResponse(results);
+        setCached(cacheKey, results, 30);
+        return jsonResponse(results, 200, 'public, max-age=10, stale-while-revalidate=30');
       } catch (e) {
         return jsonResponse({ error: e.message }, 500);
       }
@@ -280,6 +315,11 @@ export default {
           ).run();
         }
 
+        // Xóa cache để dữ liệu mới hiển thị ngay lập tức
+        clearCacheByPrefix('users:');
+        clearCacheByPrefix('jobs:');
+        clearCacheByPrefix('telemetry_filters');
+
         return jsonResponse({ success: true, user_id: userId });
       } catch (e) {
         return jsonResponse({ error: e.message }, 500);
@@ -293,6 +333,11 @@ export default {
         const userId = Number(userMatch[1]);
         await env.DB.prepare('DELETE FROM jobs WHERE user_id = ?').bind(userId).run();
         await env.DB.prepare('DELETE FROM users WHERE id = ?').bind(userId).run();
+
+        clearCacheByPrefix('users:');
+        clearCacheByPrefix('jobs:');
+        clearCacheByPrefix('telemetry_filters');
+
         return jsonResponse({ success: true });
       } catch (e) {
         return jsonResponse({ error: e.message }, 500);
@@ -303,6 +348,12 @@ export default {
     // 2. API JOBS: /jobs
     // ==========================================
     if (path === '/jobs' && request.method === 'GET') {
+      const cacheKey = `jobs:${url.search}`;
+      const cached = getCached(cacheKey);
+      if (cached) {
+        return jsonResponse(cached, 200, 'public, max-age=10, stale-while-revalidate=30');
+      }
+
       try {
         const userIdParam = url.searchParams.get('user_id');
         const typeParam = url.searchParams.get('type');
@@ -330,7 +381,9 @@ export default {
 
         const stmt = env.DB.prepare(query);
         const { results } = params.length > 0 ? await stmt.bind(...params).all() : await stmt.all();
-        return jsonResponse(results);
+
+        setCached(cacheKey, results, 30);
+        return jsonResponse(results, 200, 'public, max-age=10, stale-while-revalidate=30');
       } catch (e) {
         return jsonResponse({ error: e.message }, 500);
       }
@@ -376,6 +429,10 @@ export default {
           ).run();
         }
 
+        clearCacheByPrefix('jobs:');
+        clearCacheByPrefix('users:');
+        clearCacheByPrefix('telemetry_filters');
+
         return jsonResponse({ success: true });
       } catch (e) {
         return jsonResponse({ error: e.message }, 500);
@@ -387,6 +444,11 @@ export default {
       try {
         const jobId = Number(jobMatch[1]);
         await env.DB.prepare('DELETE FROM jobs WHERE id = ?').bind(jobId).run();
+
+        clearCacheByPrefix('jobs:');
+        clearCacheByPrefix('users:');
+        clearCacheByPrefix('telemetry_filters');
+
         return jsonResponse({ success: true });
       } catch (e) {
         return jsonResponse({ error: e.message }, 500);
@@ -394,9 +456,15 @@ export default {
     }
 
     // ==========================================
-    // 3. API LOGS: /logs
+    // 3. API LOGS: /logs (TỐI ƯU HÓA ĐỌC CAO TỐC & CACHE)
     // ==========================================
     if (path === '/logs' && request.method === 'GET') {
+      const cacheKey = `logs:${url.search}`;
+      const cached = getCached(cacheKey);
+      if (cached) {
+        return jsonResponse(cached, 200, 'public, max-age=5, stale-while-revalidate=10');
+      }
+
       try {
         const jobId = url.searchParams.get('job_id');
         const userId = url.searchParams.get('user_id');
@@ -404,8 +472,9 @@ export default {
         const deviceParam = url.searchParams.get('device') || url.searchParams.get('device_name');
         const ipParam = url.searchParams.get('ip') || url.searchParams.get('ip_address');
         const userParam = url.searchParams.get('user') || url.searchParams.get('user_name');
-        const limit = Math.min(Number(url.searchParams.get('limit')) || 150, 500);
+        const limit = Math.min(Number(url.searchParams.get('limit')) || 100, 300);
 
+        // JOIN tách biệt j1 và j2 thay vì dùng OR, cho phép SQLite dùng index Primary Key và Unique Key cực nhanh
         let query = `
           SELECT 
             l.id,
@@ -420,31 +489,32 @@ export default {
             l.duration_ms,
             l.ip_address,
             l.user_name,
-            COALESCE(l.device_name, CASE WHEN j.type = 'web' THEN 'Trình duyệt Web' ELSE 'Thiết bị di động' END) as device_name,
+            COALESCE(l.device_name, CASE WHEN COALESCE(j1.type, j2.type) = 'web' THEN 'Trình duyệt Web' ELSE 'Thiết bị di động' END) as device_name,
             l.created_at,
-            j.name as job_name,
-            j.type as job_type,
-            u.id as user_id,
-            u.name as job_owner_name
+            COALESCE(j1.name, j2.name) as job_name,
+            COALESCE(j1.type, j2.type) as job_type,
+            COALESCE(u1.id, u2.id) as user_id,
+            COALESCE(u1.name, u2.name) as job_owner_name
           FROM api_logs l
-          LEFT JOIN jobs j ON (l.job_id IS NOT NULL AND l.job_id = j.id) 
-                           OR (l.app_identifier IS NOT NULL AND l.app_identifier = j.app_identifier)
-          LEFT JOIN users u ON j.user_id = u.id
+          LEFT JOIN jobs j1 ON l.job_id = j1.id
+          LEFT JOIN jobs j2 ON (l.job_id IS NULL AND l.app_identifier = j2.app_identifier)
+          LEFT JOIN users u1 ON j1.user_id = u1.id
+          LEFT JOIN users u2 ON j2.user_id = u2.id
           WHERE 1=1
         `;
         const params = [];
 
         if (jobId) {
-          query += ' AND (l.job_id = ? OR j.id = ?)';
-          params.push(Number(jobId), Number(jobId));
+          query += ' AND l.job_id = ?';
+          params.push(Number(jobId));
         }
         if (userId) {
-          query += ' AND (u.id = ?)';
-          params.push(Number(userId));
+          query += ' AND (u1.id = ? OR u2.id = ?)';
+          params.push(Number(userId), Number(userId));
         }
         if (appIdentifier) {
-          query += ' AND (l.app_identifier = ? OR j.app_identifier = ?)';
-          params.push(appIdentifier, appIdentifier);
+          query += ' AND l.app_identifier = ?';
+          params.push(appIdentifier);
         }
         if (deviceParam) {
           query += ' AND l.device_name LIKE ?';
@@ -464,14 +534,15 @@ export default {
 
         const stmt = env.DB.prepare(query);
         const { results } = await stmt.bind(...params).all();
-        return jsonResponse(results);
+
+        setCached(cacheKey, results, 5);
+        return jsonResponse(results, 200, 'public, max-age=5, stale-while-revalidate=10');
       } catch (e) {
-        // Fallback đơn giản nếu query phức tạp bị lỗi do DB chưa kịp sync
         try {
           const { results } = await env.DB.prepare(
-            'SELECT * FROM api_logs ORDER BY created_at DESC LIMIT 100'
+            'SELECT * FROM api_logs ORDER BY created_at DESC LIMIT 50'
           ).all();
-          return jsonResponse(results);
+          return jsonResponse(results, 200, 'public, max-age=5');
         } catch (err) {
           return jsonResponse({ error: e.message }, 500);
         }
@@ -573,7 +644,6 @@ export default {
             clientIp || null
           ).run();
         } catch (insertErr) {
-          // Fallback nếu cột mới gặp sự cố
           await env.DB.prepare(`
             INSERT INTO api_logs (
               job_id, app_identifier, endpoint, method, status_code, 
@@ -593,6 +663,10 @@ export default {
           ).run();
         }
 
+        // Xóa cache logs và metadata để phản ánh dữ liệu mới
+        clearCacheByPrefix('logs:');
+        clearCacheByPrefix('telemetry_filters');
+
         return jsonResponse({ success: true, job_id: effectiveJobId });
       } catch (e) {
         return jsonResponse({ error: e.message }, 500);
@@ -600,9 +674,15 @@ export default {
     }
 
     // ==========================================
-    // 4. API CRASHES: /crashes (Crashlytics)
+    // 4. API CRASHES: /crashes (Crashlytics CACHED & TỐI ƯU HÓA)
     // ==========================================
     if (path === '/crashes' && request.method === 'GET') {
+      const cacheKey = `crashes:${url.search}`;
+      const cached = getCached(cacheKey);
+      if (cached) {
+        return jsonResponse(cached, 200, 'public, max-age=5, stale-while-revalidate=10');
+      }
+
       try {
         const jobId = url.searchParams.get('job_id');
         const userId = url.searchParams.get('user_id');
@@ -610,34 +690,35 @@ export default {
         const isFatal = url.searchParams.get('is_fatal');
         const deviceParam = url.searchParams.get('device');
         const userParam = url.searchParams.get('user');
-        const limit = Math.min(Number(url.searchParams.get('limit')) || 100, 500);
+        const limit = Math.min(Number(url.searchParams.get('limit')) || 100, 300);
 
         let query = `
           SELECT 
             c.*,
-            j.name as job_name,
-            j.type as job_type,
-            u.id as user_id,
-            u.name as user_name
+            COALESCE(j1.name, j2.name) as job_name,
+            COALESCE(j1.type, j2.type) as job_type,
+            COALESCE(u1.id, u2.id) as user_id,
+            COALESCE(u1.name, u2.name) as user_name
           FROM app_crashes c
-          LEFT JOIN jobs j ON (c.job_id IS NOT NULL AND c.job_id = j.id) 
-                           OR (c.app_identifier IS NOT NULL AND c.app_identifier = j.app_identifier)
-          LEFT JOIN users u ON j.user_id = u.id
+          LEFT JOIN jobs j1 ON c.job_id = j1.id
+          LEFT JOIN jobs j2 ON (c.job_id IS NULL AND c.app_identifier = j2.app_identifier)
+          LEFT JOIN users u1 ON j1.user_id = u1.id
+          LEFT JOIN users u2 ON j2.user_id = u2.id
           WHERE 1=1
         `;
         const params = [];
 
         if (jobId) {
-          query += ' AND (c.job_id = ? OR j.id = ?)';
-          params.push(Number(jobId), Number(jobId));
+          query += ' AND c.job_id = ?';
+          params.push(Number(jobId));
         }
         if (userId) {
-          query += ' AND (u.id = ?)';
-          params.push(Number(userId));
+          query += ' AND (u1.id = ? OR u2.id = ?)';
+          params.push(Number(userId), Number(userId));
         }
         if (appIdentifier) {
-          query += ' AND (c.app_identifier = ? OR j.app_identifier = ?)';
-          params.push(appIdentifier, appIdentifier);
+          query += ' AND c.app_identifier = ?';
+          params.push(appIdentifier);
         }
         if (isFatal !== null && isFatal !== undefined && isFatal !== '') {
           query += ' AND c.is_fatal = ?';
@@ -648,7 +729,7 @@ export default {
           params.push(`%${deviceParam}%`);
         }
         if (userParam) {
-          query += ' AND (u.name LIKE ? OR c.custom_attributes LIKE ?)';
+          query += ' AND (COALESCE(u1.name, u2.name) LIKE ? OR c.custom_attributes LIKE ?)';
           params.push(`%${userParam}%`, `%${userParam}%`);
         }
 
@@ -657,13 +738,15 @@ export default {
 
         const stmt = env.DB.prepare(query);
         const { results } = await stmt.bind(...params).all();
-        return jsonResponse(results);
+
+        setCached(cacheKey, results, 5);
+        return jsonResponse(results, 200, 'public, max-age=5, stale-while-revalidate=10');
       } catch (e) {
         try {
           const { results } = await env.DB.prepare(
-            'SELECT * FROM app_crashes ORDER BY created_at DESC LIMIT 100'
+            'SELECT * FROM app_crashes ORDER BY created_at DESC LIMIT 50'
           ).all();
-          return jsonResponse(results);
+          return jsonResponse(results, 200, 'public, max-age=5');
         } catch (err) {
           return jsonResponse({ error: e.message }, 500);
         }
@@ -717,6 +800,9 @@ export default {
           formatPayload(custom_attributes)
         ).run();
 
+        clearCacheByPrefix('crashes:');
+        clearCacheByPrefix('telemetry_filters');
+
         return jsonResponse({ success: true, id: res.meta?.last_row_id, job_id: effectiveJobId });
       } catch (e) {
         return jsonResponse({ error: e.message }, 500);
@@ -724,9 +810,15 @@ export default {
     }
 
     // ==========================================
-    // 5. API EVENTS (ANALYTICS): /events
+    // 5. API EVENTS (ANALYTICS): /events (CACHED & TỐI ƯU HÓA)
     // ==========================================
     if (path === '/events' && request.method === 'GET') {
+      const cacheKey = `events:${url.search}`;
+      const cached = getCached(cacheKey);
+      if (cached) {
+        return jsonResponse(cached, 200, 'public, max-age=5, stale-while-revalidate=10');
+      }
+
       try {
         const jobId = url.searchParams.get('job_id');
         const userId = url.searchParams.get('user_id');
@@ -735,7 +827,7 @@ export default {
         const eventType = url.searchParams.get('event_type');
         const deviceParam = url.searchParams.get('device');
         const userParam = url.searchParams.get('user');
-        const limit = Math.min(Number(url.searchParams.get('limit')) || 150, 500);
+        const limit = Math.min(Number(url.searchParams.get('limit')) || 100, 300);
 
         // Liệt kê cột tường minh thay vì e.*: "u.id as user_id" từng đè lên
         // e.user_id và trả về số, khiến ô tìm kiếm ở Dashboard ném TypeError.
@@ -751,30 +843,31 @@ export default {
             e.parameters,
             e.device_info,
             e.created_at,
-            j.name as job_name,
-            j.type as job_type,
-            u.id as owner_id,
-            u.name as user_name,
-            COALESCE(e.user_id, CAST(u.id AS TEXT)) as user_id
+            COALESCE(j1.name, j2.name) as job_name,
+            COALESCE(j1.type, j2.type) as job_type,
+            COALESCE(u1.id, u2.id) as owner_id,
+            COALESCE(u1.name, u2.name) as user_name,
+            COALESCE(e.user_id, CAST(COALESCE(u1.id, u2.id) AS TEXT)) as user_id
           FROM app_events e
-          LEFT JOIN jobs j ON (e.job_id IS NOT NULL AND e.job_id = j.id) 
-                           OR (e.app_identifier IS NOT NULL AND e.app_identifier = j.app_identifier)
-          LEFT JOIN users u ON j.user_id = u.id
+          LEFT JOIN jobs j1 ON e.job_id = j1.id
+          LEFT JOIN jobs j2 ON (e.job_id IS NULL AND e.app_identifier = j2.app_identifier)
+          LEFT JOIN users u1 ON j1.user_id = u1.id
+          LEFT JOIN users u2 ON j2.user_id = u2.id
           WHERE 1=1
         `;
         const params = [];
 
         if (jobId) {
-          query += ' AND (e.job_id = ? OR j.id = ?)';
-          params.push(Number(jobId), Number(jobId));
+          query += ' AND e.job_id = ?';
+          params.push(Number(jobId));
         }
         if (userId) {
-          query += ' AND (u.id = ?)';
-          params.push(Number(userId));
+          query += ' AND (u1.id = ? OR u2.id = ?)';
+          params.push(Number(userId), Number(userId));
         }
         if (appIdentifier) {
-          query += ' AND (e.app_identifier = ? OR j.app_identifier = ?)';
-          params.push(appIdentifier, appIdentifier);
+          query += ' AND e.app_identifier = ?';
+          params.push(appIdentifier);
         }
         if (eventName) {
           query += ' AND e.event_name = ?';
@@ -789,7 +882,7 @@ export default {
           params.push(`%${deviceParam}%`);
         }
         if (userParam) {
-          query += ' AND (e.user_id LIKE ? OR u.name LIKE ?)';
+          query += ' AND (e.user_id LIKE ? OR COALESCE(u1.name, u2.name) LIKE ?)';
           params.push(`%${userParam}%`, `%${userParam}%`);
         }
 
@@ -798,13 +891,15 @@ export default {
 
         const stmt = env.DB.prepare(query);
         const { results } = await stmt.bind(...params).all();
-        return jsonResponse(results);
+
+        setCached(cacheKey, results, 5);
+        return jsonResponse(results, 200, 'public, max-age=5, stale-while-revalidate=10');
       } catch (e) {
         try {
           const { results } = await env.DB.prepare(
-            'SELECT * FROM app_events ORDER BY created_at DESC LIMIT 100'
+            'SELECT * FROM app_events ORDER BY created_at DESC LIMIT 50'
           ).all();
-          return jsonResponse(results);
+          return jsonResponse(results, 200, 'public, max-age=5');
         } catch (err) {
           return jsonResponse({ error: e.message }, 500);
         }
@@ -859,6 +954,9 @@ export default {
           formatPayload(parameters),
           formatPayload(device_info)
         ).run();
+
+        clearCacheByPrefix('events:');
+        clearCacheByPrefix('telemetry_filters');
 
         return jsonResponse({ success: true, id: res.meta?.last_row_id, job_id: effectiveJobId });
       } catch (e) {

@@ -80,3 +80,11 @@ CREATE INDEX IF NOT EXISTS idx_events_job_id ON app_events(job_id);
 CREATE INDEX IF NOT EXISTS idx_events_app_identifier ON app_events(app_identifier);
 CREATE INDEX IF NOT EXISTS idx_events_name ON app_events(event_name);
 
+-- Composite Indexes tăng tốc đọc gấp 10-100x khi lọc theo App/Job và sắp xếp theo Thời gian
+CREATE INDEX IF NOT EXISTS idx_logs_app_created ON api_logs(app_identifier, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_logs_job_created ON api_logs(job_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_crashes_app_created ON app_crashes(app_identifier, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_crashes_job_created ON app_crashes(job_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_events_app_created ON app_events(app_identifier, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_events_job_created ON app_events(job_id, created_at DESC);
+

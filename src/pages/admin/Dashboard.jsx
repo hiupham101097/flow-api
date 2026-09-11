@@ -302,6 +302,9 @@ function Dashboard() {
   const [deviceFilter, setDeviceFilter] = useState('all');
   const [userFilter, setUserFilter] = useState('all');
 
+  const isFetchingUsersRef = useRef(false);
+  const isFetchingMetaRef = useRef(false);
+
   const copyToClipboard = async (value, item) => {
     try {
       await navigator.clipboard.writeText(value);
@@ -315,9 +318,10 @@ function Dashboard() {
   };
 
   const fetchUsers = async () => {
+    if (isFetchingUsersRef.current) return;
+    isFetchingUsersRef.current = true;
     try {
       const response = await fetch(`${API_MONITOR_URL}/users`, {
-        cache: 'no-store',
         headers: { Accept: 'application/json' },
       });
       if (response.ok) {
@@ -328,13 +332,16 @@ function Dashboard() {
       }
     } catch (err) {
       console.warn('Lỗi tải /users, chuyển sang tự nhận diện từ telemetry:', err);
+    } finally {
+      isFetchingUsersRef.current = false;
     }
   };
 
   const fetchFilterMetadata = async () => {
+    if (isFetchingMetaRef.current) return;
+    isFetchingMetaRef.current = true;
     try {
       const response = await fetch(`${API_MONITOR_URL}/telemetry/filters`, {
-        cache: 'no-store',
         headers: { Accept: 'application/json' },
       });
       if (response.ok) {
@@ -349,16 +356,18 @@ function Dashboard() {
       }
     } catch (err) {
       console.warn('Lỗi tải /telemetry/filters:', err);
+    } finally {
+      isFetchingMetaRef.current = false;
     }
   };
 
   const fetchAllTelemetry = async (overrideFilter, overrideDevice, overrideUser) => {
     try {
       // Đảm bảo usersList và filter metadata luôn được nạp lại nếu trước đó WebView kết nối trễ
-      if (usersList.length === 0) {
+      if (usersList.length === 0 && !isFetchingUsersRef.current) {
         fetchUsers();
       }
-      if (!filterMeta.apps || filterMeta.apps.length === 0) {
+      if ((!filterMeta.apps || filterMeta.apps.length === 0) && !isFetchingMetaRef.current) {
         fetchFilterMetadata();
       }
 
@@ -384,7 +393,7 @@ function Dashboard() {
 
       const queryString = queryParts.length > 0 ? `?${queryParts.join('&')}` : '';
 
-      const fetchOptions = { cache: 'no-store' };
+      const fetchOptions = { headers: { Accept: 'application/json' } };
       const [logsRes, crashesRes, eventsRes] = await Promise.all([
         fetch(`${API_MONITOR_URL}/logs${queryString}`, fetchOptions),
         fetch(`${API_MONITOR_URL}/crashes${queryString}`, fetchOptions),
