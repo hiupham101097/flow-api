@@ -2206,4 +2206,445 @@ tbody tr.row-error:hover {
   color: var(--text);
 }
 
+/* ==========================================
+   THỐNG KÊ SỰ KIỆN (EVENT FUNNEL)
+   ========================================== */
 
+.funnel-alert {
+  margin: 1rem 1.25rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 0.84rem;
+}
+
+.funnel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1.35rem;
+  padding: 1.25rem;
+}
+
+.funnel-block {
+  padding: 1.1rem 1.15rem 1.2rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+}
+
+.funnel-block-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.funnel-block-head h3 {
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.funnel-block-head span {
+  font-size: 0.76rem;
+  color: var(--text-dim);
+}
+
+/* ---- Thanh phân bố kết quả ---- */
+.outcome-bar {
+  display: flex;
+  width: 100%;
+  height: 26px;
+  overflow: hidden;
+  border-radius: 7px;
+  background: var(--surface-hover);
+}
+
+.outcome-bar-slice {
+  min-width: 3px;
+  height: 100%;
+  transition: width 220ms ease;
+}
+
+.outcome-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.55rem 1.25rem;
+  margin-top: 1rem;
+  list-style: none;
+}
+
+.outcome-legend li {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: baseline;
+  gap: 0.15rem 0.5rem;
+  font-size: 0.82rem;
+}
+
+.legend-dot {
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  transform: translateY(-1px);
+}
+
+.legend-label {
+  color: var(--text-muted);
+}
+
+.outcome-legend strong {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+/* Số phần trăm xuống dòng riêng, cùng cột với tên nhóm */
+.outcome-legend small {
+  grid-column: 2 / -1;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+}
+
+/* ---- Phễu theo bước ---- */
+.step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.step-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.1fr) minmax(90px, 2fr) auto;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.step-name {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.step-name strong {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.step-name code {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+
+.step-bar-wrap {
+  min-width: 0;
+}
+
+.step-bar {
+  display: flex;
+  height: 18px;
+  overflow: hidden;
+  border-radius: 5px;
+  background: var(--surface-hover);
+}
+
+.step-bar-ok {
+  background: var(--success);
+}
+
+.step-bar-fail {
+  background: var(--danger);
+}
+
+.step-numbers {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.step-numbers .ok {
+  color: var(--success);
+}
+
+.step-numbers .fail {
+  color: var(--danger);
+}
+
+.step-numbers .pctcell {
+  min-width: 48px;
+  text-align: right;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.step-numbers .latency {
+  min-width: 150px;
+  text-align: right;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+}
+
+/* ---- Bảng nguyên nhân lỗi ---- */
+.reason-table-wrap {
+  overflow-x: auto;
+}
+
+.reason-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.79rem;
+}
+
+.reason-table th {
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid var(--line-strong);
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.reason-table td {
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-muted);
+}
+
+.reason-table tr:last-child td {
+  border-bottom: none;
+}
+
+.reason-table code {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+}
+
+/* ---- Lý do chuyển duyệt tay ---- */
+.fallback-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  list-style: none;
+}
+
+.fallback-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 0.79rem;
+}
+
+.fallback-step {
+  min-width: 140px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.fallback-list code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.73rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fallback-list strong {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Biểu đồ theo ngày ---- */
+.series-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.4rem;
+  height: 168px;
+  overflow-x: auto;
+  padding-top: 0.5rem;
+}
+
+.series-col {
+  display: flex;
+  min-width: 34px;
+  height: 100%;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.3rem;
+}
+
+.series-stack {
+  display: flex;
+  width: 100%;
+  max-width: 46px;
+  flex-direction: column-reverse;
+  overflow: hidden;
+  border-radius: 5px 5px 0 0;
+  background: var(--surface-hover);
+}
+
+.series-value {
+  color: var(--text);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.series-label {
+  color: var(--text-dim);
+  font-size: 0.65rem;
+  white-space: nowrap;
+}
+
+/* ---- Modal cấu hình luồng ---- */
+.funnel-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 1.25rem;
+}
+
+.funnel-setup-hint {
+  padding: 0.7rem 0.85rem;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--text-muted);
+  font-size: 0.79rem;
+  line-height: 1.55;
+}
+
+.funnel-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.funnel-field span {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.funnel-field input {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.84rem;
+}
+
+.funnel-field input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.funnel-field input:disabled {
+  color: var(--text-dim);
+  cursor: not-allowed;
+}
+
+.funnel-suggestions > span,
+.funnel-preview > span {
+  display: block;
+  margin-bottom: 0.45rem;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.funnel-suggestions > div,
+.funnel-preview > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.chip-btn {
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  transition: all 120ms ease;
+}
+
+.chip-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chip-btn em,
+.funnel-preview code em {
+  color: var(--text-dim);
+  font-style: normal;
+}
+
+.funnel-preview code {
+  padding: 0.28rem 0.5rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.funnel-preview-empty {
+  color: var(--warning);
+  font-size: 0.76rem;
+}
+
+@media (max-width: 860px) {
+  .step-row {
+    grid-template-columns: 1fr;
+    gap: 0.35rem;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .step-numbers {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .step-numbers .pctcell,
+  .step-numbers .latency {
+    min-width: 0;
+    text-align: left;
+  }
+
+  .funnel-body {
+    padding: 0.9rem;
+  }
+
+  .outcome-legend {
+    grid-template-columns: 1fr;
+  }
+}

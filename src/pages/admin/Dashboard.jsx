@@ -4,6 +4,32 @@ import '../../styles/global.css';
 
 const API_MONITOR_URL = import.meta.env.VITE_WORKER_URL || 'https://flow-api.hieupham101097.workers.dev';
 
+// Màu của từng nhóm kết quả, dùng chung cho cột chồng, chú giải và biểu đồ ngày
+const OUTCOME_COLORS = {
+  success_auto: 'var(--success)',
+  success_manual: 'var(--accent)',
+  failed: 'var(--danger)',
+  abandoned: 'var(--warning)',
+  open: 'var(--text-dim)',
+  other: 'var(--line-strong)',
+};
+
+const RANGE_OPTIONS = [
+  { value: 1, label: 'Hôm nay' },
+  { value: 7, label: '7 ngày qua' },
+  { value: 30, label: '30 ngày qua' },
+  { value: 90, label: '90 ngày qua' },
+];
+
+// Số dòng telemetry tối đa giữ trong bộ nhớ khi polling ghép dần
+const TELEMETRY_CAP = 300;
+
+const formatMs = (value) => {
+  if (value === null || value === undefined) return '—';
+  const ms = Number(value);
+  return ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10000 ? 0 : 1)}s` : `${ms}ms`;
+};
+
 // Chuẩn hóa timestamp SQLite UTC sang Date object
 function parseUtcDate(dateStr) {
   if (!dateStr) return null;
@@ -285,7 +311,7 @@ function Dashboard() {
   const [eventPageSize, setEventPageSize] = useState(20);
 
   // Auto-refresh control (Mặc định 15s để không chiếm dụng CPU WebView)
-  const [refreshInterval, setRefreshInterval] = useState(15000);
+  const [refreshInterval, setRefreshInterval] = useState(30000);
 
   // Modals
   const [selectedLog, setSelectedLog] = useState(null);
@@ -305,6 +331,18 @@ function Dashboard() {
 
   const isFetchingUsersRef = useRef(false);
   const isFetchingMetaRef = useRef(false);
+
+  // Thống kê sự kiện (funnel): danh sách cấu hình, funnel đang xem và số liệu đã tổng hợp
+  const [funnels, setFunnels] = useState([]);
+  const [activeFunnel, setActiveFunnel] = useState('ekyb');
+  const [statsRange, setStatsRange] = useState(7);
+  const [funnelStats, setFunnelStats] = useState(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsError, setStatsError] = useState(null);
+  const [funnelSetupOpen, setFunnelSetupOpen] = useState(false);
+  const [eventCatalog, setEventCatalog] = useState({ events: [], suggestions: [] });
+  const [funnelDraft, setFunnelDraft] = useState({ funnel_key: '', name: '', event_prefix: '', app_identifier: '' });
+  const [savingFunnel, setSavingFunnel] = useState(false);
 
   const copyToClipboard = async (value, item) => {
     try {
@@ -335,6 +373,26 @@ function Dashboard() {
       console.warn('Lỗi tải /users, chuyển sang tự nhận diện từ telemetry:', err);
     } finally {
       isFetchingUsersRef.current = false;
+    }
+  };
+
+  // Danh sách chỉ tải bản rút gọn (payload cắt 300 ký tự, không có request_payload
+  // và stack trace đầy đủ) để giảm dữ liệu đọc. Bản đầy đủ chỉ lấy khi mở chi tiết.
+  const openDetail = async (type, row, setter) => {
+    setter(row);
+    if (!row?.id) return;
+    try {
+      const response = await fetch(
+        `${API_MONITOR_URL}/telemetry/detail?type=${type}&id=${encodeURIComponent(row.id)}`,
+        { cache: 'no-store', headers: { Accept: 'application/json' } }
+      );
+      if (!response.ok) return;
+      const full = await response.json();
+      if (!full || !full.id) return;
+      // Người dùng có thể đã đóng hoặc mở bản ghi khác trong lúc chờ
+      setter((current) => (current && current.id === full.id ? { ...current, ...full } : current));
+    } catch (err) {
+      console.warn('Không tải được bản đầy đủ, giữ bản rút gọn:', err);
     }
   };
 
@@ -370,7 +428,24 @@ function Dashboard() {
     }
   };
 
-  const fetchAllTelemetry = async (overrideFilter, overrideDevice, overrideUser) => {
+  // Interval polling cần đọc danh sách hiện tại để biết id lớn nhất. Nếu đưa
+  // logs/crashes/events vào dependency của useEffect thì timer bị dựng lại sau
+  // mỗi lần dữ liệu đổi, nên giữ qua ref.
+  const telemetryRef = useRef({ logs: [], crashes: [], events: [] });
+  useEffect(() => {
+    telemetryRef.current = { logs, crashes, events };
+  }, [logs, crashes, events]);
+
+  // Ghép các dòng mới lấy về vào đầu danh sách đang giữ, cắt bớt phần đuôi.
+  // Dùng cho chế độ polling tăng dần: server chỉ trả về dòng mới hơn id đang có.
+  const mergeIncoming = (previous, incoming, cap) => {
+    if (!incoming.length) return previous;
+    const seen = new Set(incoming.map((row) => row.id));
+    return [...incoming, ...previous.filter((row) => !seen.has(row.id))].slice(0, cap);
+  };
+
+  const fetchAllTelemetry = async (overrideFilter, overrideDevice, overrideUser, options = {}) => {
+    const incremental = options.incremental === true;
     try {
       // Đảm bảo usersList và filter metadata luôn được nạp lại nếu trước đó WebView kết nối trễ
       if (usersList.length === 0 && !isFetchingUsersRef.current) {
@@ -400,43 +475,52 @@ function Dashboard() {
         queryParts.push(`user=${encodeURIComponent(activeUserName)}`);
       }
 
-      const queryString = queryParts.length > 0 ? `?${queryParts.join('&')}` : '';
+      // Polling tăng dần: chỉ hỏi những dòng mới hơn dòng đang giữ. Một dashboard
+      // mở cả ngày mà app không sinh telemetry sẽ đọc 0 dòng thay vì kéo lại toàn
+      // bộ danh sách sau mỗi chu kỳ — đây là nguồn đốt hạn mức đọc D1 lớn nhất.
+      const withCursor = (base, rows) => {
+        const parts = [...queryParts];
+        if (incremental && rows.length > 0) {
+          const maxId = rows.reduce((max, row) => (row.id > max ? row.id : max), 0);
+          if (maxId > 0) parts.push(`after_id=${maxId}`);
+        }
+        return parts.length ? `${base}?${parts.join('&')}` : base;
+      };
 
+      const held = telemetryRef.current;
+      // Không đặt cache:'no-store' nữa để header Cache-Control của worker còn tác dụng
       const fetchOptions = { headers: { Accept: 'application/json' } };
       const [logsRes, crashesRes, eventsRes] = await Promise.all([
-        fetch(`${API_MONITOR_URL}/logs${queryString}`, fetchOptions),
-        fetch(`${API_MONITOR_URL}/crashes${queryString}`, fetchOptions),
-        fetch(`${API_MONITOR_URL}/events${queryString}`, fetchOptions),
+        fetch(`${API_MONITOR_URL}${withCursor('/logs', held.logs)}`, fetchOptions),
+        fetch(`${API_MONITOR_URL}${withCursor('/crashes', held.crashes)}`, fetchOptions),
+        fetch(`${API_MONITOR_URL}${withCursor('/events', held.events)}`, fetchOptions),
       ]);
 
-      const checkQuotaError = async (res) => {
-        if (!res.ok) {
-          const txt = await res.text().catch(() => '');
-          if (txt.includes('daily row read limit') || txt.includes('exceeded D1') || txt.includes('D1_ERROR')) {
+      const applyResult = async (response, setter, current) => {
+        if (!response.ok) {
+          const text = await response.text().catch(() => '');
+          if (
+            text.includes('daily row read limit') ||
+            text.includes('exceeded D1') ||
+            text.includes('D1_ERROR')
+          ) {
             setQuotaExceeded(true);
           }
+          return;
+        }
+        const data = await response.json();
+        if (!Array.isArray(data)) return;
+        if (incremental && current.length > 0) {
+          setter((prev) => mergeIncoming(prev, data, TELEMETRY_CAP));
+        } else {
+          setter((prev) => (hasTelemetryArrayChanged(prev, data) ? data : prev));
         }
       };
-      await Promise.all([checkQuotaError(logsRes), checkQuotaError(crashesRes), checkQuotaError(eventsRes)]);
 
-      if (logsRes.ok) {
-        const data = await logsRes.json();
-        if (Array.isArray(data)) {
-          setLogs((prev) => hasTelemetryArrayChanged(prev, data) ? data : prev);
-        }
-      }
-      if (crashesRes.ok) {
-        const data = await crashesRes.json();
-        if (Array.isArray(data)) {
-          setCrashes((prev) => hasTelemetryArrayChanged(prev, data) ? data : prev);
-        }
-      }
-      if (eventsRes.ok) {
-        const data = await eventsRes.json();
-        if (Array.isArray(data)) {
-          setEvents((prev) => hasTelemetryArrayChanged(prev, data) ? data : prev);
-        }
-      }
+      await applyResult(logsRes, setLogs, held.logs);
+      await applyResult(crashesRes, setCrashes, held.crashes);
+      await applyResult(eventsRes, setEvents, held.events);
+
       setError(null);
     } catch (requestError) {
       if (requestError.message?.includes('daily row read limit') || requestError.message?.includes('exceeded D1')) {
@@ -472,11 +556,12 @@ function Dashboard() {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
         return;
       }
-      fetchAllTelemetry();
+      fetchAllTelemetry(undefined, undefined, undefined, { incremental: true });
+      if (telemetryMode === 'funnels') fetchFunnelStats();
     }, refreshInterval);
 
     return () => window.clearInterval(interval);
-  }, [selectedFilter, deviceFilter, userFilter, refreshInterval]);
+  }, [selectedFilter, deviceFilter, userFilter, refreshInterval, telemetryMode]);
 
   const handleFilterChange = (val) => {
     setSelectedFilter(val);
@@ -671,6 +756,138 @@ function Dashboard() {
   }, [selectedFilter, availableJobs]);
 
   const currentAppId = activeUserJob?.app_identifier || 'vn.fizahub.app';
+
+  // ---- Thống kê sự kiện (funnel) ----
+  const fetchFunnels = async () => {
+    try {
+      const response = await fetch(`${API_MONITOR_URL}/funnels`, {
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) return;
+      const data = await response.json();
+      if (!Array.isArray(data)) return;
+      setFunnels(data);
+      setActiveFunnel((current) => {
+        if (current && data.some((item) => item.funnel_key === current)) return current;
+        return data[0]?.funnel_key || '';
+      });
+    } catch (err) {
+      console.warn('Không tải được danh sách funnel:', err);
+    }
+  };
+
+  const fetchFunnelStats = async (overrides = {}) => {
+    const funnelKey = overrides.funnel ?? activeFunnel;
+    if (!funnelKey) {
+      setFunnelStats(null);
+      return;
+    }
+
+    try {
+      setStatsLoading(true);
+      const params = new URLSearchParams({
+        funnel: funnelKey,
+        days: String(overrides.days ?? statsRange),
+      });
+
+      // Thống kê bám theo đúng bộ lọc đang chọn ở đầu trang
+      const appId = activeUserJob?.app_identifier;
+      if (appId) params.set('app_identifier', appId);
+      if (deviceFilter && deviceFilter !== 'all') params.set('device', deviceFilter);
+      if (userFilter && userFilter !== 'all') params.set('user', userFilter);
+
+      const response = await fetch(`${API_MONITOR_URL}/events/stats?${params.toString()}`, {
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+      });
+      const data = await response.json();
+      if (!response.ok || data.error) {
+        throw new Error(data.error || `HTTP ${response.status}`);
+      }
+      setFunnelStats(data);
+      setStatsError(null);
+    } catch (err) {
+      setFunnelStats(null);
+      setStatsError(err.message);
+    } finally {
+      setStatsLoading(false);
+    }
+  };
+
+  const openFunnelSetup = async (funnelKey = null) => {
+    const existing = funnelKey ? funnels.find((item) => item.funnel_key === funnelKey) : null;
+    setFunnelDraft(
+      existing
+        ? {
+            funnel_key: existing.funnel_key,
+            name: existing.name,
+            event_prefix: existing.event_prefix || '',
+            app_identifier: existing.app_identifier || '',
+            isEdit: true,
+          }
+        : { funnel_key: '', name: '', event_prefix: '', app_identifier: '', isEdit: false }
+    );
+    setFunnelSetupOpen(true);
+
+    try {
+      const response = await fetch(`${API_MONITOR_URL}/events/catalog`, { cache: 'no-store' });
+      if (response.ok) setEventCatalog(await response.json());
+    } catch (err) {
+      console.warn('Không tải được danh mục sự kiện:', err);
+    }
+  };
+
+  const saveFunnel = async () => {
+    if (!funnelDraft.funnel_key.trim() || !funnelDraft.name.trim()) return;
+    try {
+      setSavingFunnel(true);
+      const response = await fetch(`${API_MONITOR_URL}/funnels`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          funnel_key: funnelDraft.funnel_key.trim(),
+          name: funnelDraft.name.trim(),
+          event_prefix: funnelDraft.event_prefix.trim(),
+          app_identifier: funnelDraft.app_identifier?.trim() || null,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
+
+      await fetchFunnels();
+      setActiveFunnel(data.funnel.funnel_key);
+      setFunnelSetupOpen(false);
+      fetchFunnelStats({ funnel: data.funnel.funnel_key });
+    } catch (err) {
+      setStatsError(err.message);
+    } finally {
+      setSavingFunnel(false);
+    }
+  };
+
+  const deleteFunnel = async (funnelKey) => {
+    try {
+      await fetch(`${API_MONITOR_URL}/funnels?funnel_key=${encodeURIComponent(funnelKey)}`, {
+        method: 'DELETE',
+      });
+      setFunnelSetupOpen(false);
+      await fetchFunnels();
+    } catch (err) {
+      setStatsError(err.message);
+    }
+  };
+
+  useEffect(() => {
+    fetchFunnels();
+  }, []);
+
+  // Chỉ gọi API thống kê khi thực sự đang xem tab đó, tránh tốn băng thông WebView
+  useEffect(() => {
+    if (telemetryMode !== 'funnels') return;
+    fetchFunnelStats();
+  }, [telemetryMode, activeFunnel, statsRange, selectedFilter, deviceFilter, userFilter]);
+
 
   // Integration Snippets
   const flutterCrashlyticsSnippet = `// 1. Tự động ghi nhận Crash trong main.dart của Flutter
@@ -1023,6 +1240,8 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                 { value: 10000, label: '10 giây' },
                 { value: 15000, label: '15 giây' },
                 { value: 30000, label: '30 giây' },
+                { value: 60000, label: '1 phút (tiết kiệm D1)' },
+                { value: 300000, label: '5 phút' },
               ]}
               alignRight={true}
               ariaLabel="Chu kỳ tự động tải dữ liệu mới"
@@ -1104,6 +1323,14 @@ const res = await monitoredFetch('https://api.example.com/data');`;
         >
           <span>📈 Analytics & Sự kiện</span>
           <span className="mode-badge">{events.length}</span>
+        </button>
+        <button
+          type="button"
+          className={`mode-pill-btn ${telemetryMode === 'funnels' ? 'active' : ''}`}
+          onClick={() => { setTelemetryMode('funnels'); setSearchTerm(''); }}
+        >
+          <span>📊 Thống kê sự kiện</span>
+          <span className="mode-badge">{funnels.length}</span>
         </button>
       </div>
 
@@ -1251,6 +1478,51 @@ const res = await monitoredFetch('https://api.example.com/data');`;
             <span>Tần suất tương tác</span>
             <strong>{totalEvents > 0 ? `${totalEvents} logs` : '0'}</strong>
             <small>Thời gian thực</small>
+          </div>
+        </section>
+      )}
+
+      {telemetryMode === 'funnels' && funnelStats && funnelStats.totals.attempts > 0 && (
+        <section className="metrics-strip" aria-label="Tổng quan thống kê sự kiện">
+          <div className="metric-item metric-lead">
+            <span>Tổng lượt thử</span>
+            <strong>{funnelStats.totals.attempts}</strong>
+            <small>
+              {funnelStats.range.day_from === funnelStats.range.day_to
+                ? funnelStats.range.day_from
+                : `${funnelStats.range.day_from} → ${funnelStats.range.day_to}`}
+            </small>
+          </div>
+          <div className="metric-item">
+            <span>Hoàn tất</span>
+            <strong className="metric-success">
+              {funnelStats.rates.completion}<em>%</em>
+            </strong>
+            <small>
+              {funnelStats.totals.completed}/{funnelStats.totals.attempts} lượt thử
+              {funnelStats.totals.open > 0 ? ` · ${funnelStats.totals.open} đang dở` : ''}
+            </small>
+          </div>
+          <div className="metric-item">
+            <span>Thành công</span>
+            <strong>{funnelStats.rates.success}<em>%</em></strong>
+            <small>{funnelStats.totals.succeeded}/{funnelStats.totals.attempts} lượt thử</small>
+          </div>
+          <div className="metric-item">
+            <span>Tự động (không cần người duyệt)</span>
+            <strong style={{ color: 'var(--success)' }}>
+              {funnelStats.rates.auto}<em>%</em>
+            </strong>
+            <small>trên {funnelStats.totals.succeeded} lượt thành công</small>
+          </div>
+          <div className="metric-item">
+            <span>Thất bại</span>
+            <strong className={funnelStats.rates.failure > 0 ? 'metric-error' : ''}>
+              {funnelStats.rates.failure}<em>%</em>
+            </strong>
+            <small>
+              {funnelStats.rates.failure > 0 ? 'Có bước lỗi trước khi rời luồng' : 'Không có lượt lỗi'}
+            </small>
           </div>
         </section>
       )}
@@ -1574,7 +1846,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                     <tr
                       key={log.id}
                       className={statusMeta.type !== '200' ? 'row-error' : ''}
-                      onClick={() => setSelectedLog(log)}
+                      onClick={() => openDetail('log', log, setSelectedLog)}
                       style={{ cursor: 'pointer' }}
                       title="Nhấn để xem chi tiết"
                     >
@@ -1651,7 +1923,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                           style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}
                           onClick={(event) => {
                             event.stopPropagation();
-                            setSelectedLog(log);
+                            openDetail('log', log, setSelectedLog);
                           }}
                         >
                           Chi tiết
@@ -1792,7 +2064,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                     <tr
                       key={crash.id}
                       className={isFatal ? 'row-error' : ''}
-                      onClick={() => setSelectedCrash(crash)}
+                      onClick={() => openDetail('crash', crash, setSelectedCrash)}
                       style={{ cursor: 'pointer' }}
                       title="Nhấn để xem chi tiết & Stack Trace"
                     >
@@ -1838,7 +2110,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                           style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}
                           onClick={(event) => {
                             event.stopPropagation();
-                            setSelectedCrash(crash);
+                            openDetail('crash', crash, setSelectedCrash);
                           }}
                         >
                           Stack Trace
@@ -1979,7 +2251,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                   return (
                     <tr
                       key={event.id}
-                      onClick={() => setSelectedEvent(event)}
+                      onClick={() => openDetail('event', event, setSelectedEvent)}
                       style={{ cursor: 'pointer' }}
                       title="Nhấn để xem chi tiết tham số"
                     >
@@ -2041,7 +2313,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                           style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}
                           onClick={(e) => {
                             e.stopPropagation();
-                            setSelectedEvent(event);
+                            openDetail('event', event, setSelectedEvent);
                           }}
                         >
                           Chi tiết
@@ -2063,6 +2335,282 @@ const res = await monitoredFetch('https://api.example.com/data');`;
           />
         </section>
       )}
+
+      {telemetryMode === 'funnels' && (
+        <section className="log-panel" aria-labelledby="funnel-stats-title">
+          <div className="log-panel-header">
+            <div className="log-title-group">
+              <h2 id="funnel-stats-title">
+                {funnelStats?.funnel?.name || 'Thống kê sự kiện'}
+              </h2>
+              <span className="count-pill">
+                {statsLoading ? 'Đang tính…' : `${funnelStats?.totals?.attempts ?? 0} lượt thử`}
+              </span>
+            </div>
+
+            <div className="log-controls">
+              <CustomSelect
+                className="select-mini"
+                value={activeFunnel}
+                onChange={(val) => setActiveFunnel(val)}
+                options={funnels.map((item) => ({
+                  value: item.funnel_key,
+                  label: `${item.status === 'inactive' ? '⏸ ' : ''}${item.name}`,
+                }))}
+                ariaLabel="Chọn luồng sự kiện cần thống kê"
+                placeholder="Chưa có luồng nào…"
+              />
+              <CustomSelect
+                className="select-mini"
+                value={statsRange}
+                onChange={(val) => setStatsRange(Number(val))}
+                options={RANGE_OPTIONS}
+                ariaLabel="Khoảng thời gian thống kê"
+              />
+              <button type="button" className="view-btn" onClick={() => openFunnelSetup()}>
+                ＋ Thêm luồng
+              </button>
+              {activeFunnel && (
+                <button
+                  type="button"
+                  className="view-btn"
+                  onClick={() => openFunnelSetup(activeFunnel)}
+                  title="Sửa cấu hình luồng đang chọn"
+                >
+                  ⚙️ Cấu hình
+                </button>
+              )}
+            </div>
+          </div>
+
+          {statsError && (
+            <div className="funnel-alert" role="alert">
+              ⚠️ {statsError}
+            </div>
+          )}
+
+          {!statsError && !funnelStats && !statsLoading && (
+            <div className="empty-state" style={{ padding: '2.5rem 1.25rem' }}>
+              <h3>Chưa có luồng sự kiện nào để thống kê</h3>
+              <p>
+                Bấm “Thêm luồng”, nhập tiền tố sự kiện (ví dụ <code>ekyb_</code>) và hệ thống sẽ
+                tự dò các sự kiện bắt đầu / thành công / thất bại tương ứng.
+              </p>
+            </div>
+          )}
+
+          {funnelStats && funnelStats.totals.attempts === 0 && (
+            <div className="empty-state" style={{ padding: '2.5rem 1.25rem' }}>
+              <h3>Không có lượt thử nào trong khoảng đã chọn</h3>
+              <p>
+                Đã quét {funnelStats.totals.events} sự kiện thuộc luồng này từ{' '}
+                {funnelStats.range.day_from} đến {funnelStats.range.day_to}. Thử mở rộng khoảng
+                thời gian, hoặc kiểm tra lại tên sự kiện tương quan trong phần Cấu hình.
+              </p>
+            </div>
+          )}
+
+          {funnelStats && funnelStats.totals.attempts > 0 && (
+            <div className="funnel-body">
+              {/* Phân bố kết quả cuối cùng */}
+              <div className="funnel-block">
+                <div className="funnel-block-head">
+                  <h3>Kết quả cuối cùng</h3>
+                  <span>
+                    {funnelStats.totals.completed}/{funnelStats.totals.attempts} lượt đã kết thúc
+                  </span>
+                </div>
+
+                <div className="outcome-bar" role="img" aria-label="Phân bố kết quả">
+                  {funnelStats.outcomes
+                    .filter((item) => item.count > 0)
+                    .map((item) => (
+                      <div
+                        key={item.key}
+                        className="outcome-bar-slice"
+                        style={{
+                          width: `${item.pct_of_attempts}%`,
+                          backgroundColor: OUTCOME_COLORS[item.key] || 'var(--line-strong)',
+                        }}
+                        title={`${item.label}: ${item.count} (${item.pct_of_attempts}%)`}
+                      />
+                    ))}
+                </div>
+
+                <ul className="outcome-legend">
+                  {funnelStats.outcomes
+                    .filter((item) => item.count > 0 || item.key !== 'other')
+                    .map((item) => (
+                      <li key={item.key}>
+                        <span
+                          className="legend-dot"
+                          style={{ backgroundColor: OUTCOME_COLORS[item.key] || 'var(--line-strong)' }}
+                        />
+                        <span className="legend-label">{item.label}</span>
+                        <strong>{item.count}</strong>
+                        <small>
+                          {item.pct_of_attempts}% lượt thử
+                          {item.pct_of_completed !== null && item.pct_of_completed !== undefined
+                            ? ` · ${item.pct_of_completed}% lượt đã kết thúc`
+                            : ''}
+                        </small>
+                      </li>
+                    ))}
+                </ul>
+              </div>
+
+              {/* Phễu theo từng bước */}
+              <div className="funnel-block">
+                <div className="funnel-block-head">
+                  <h3>Phễu theo từng bước</h3>
+                  <span>Tỷ lệ tính trên số lượt đã có kết quả ở bước đó</span>
+                </div>
+
+                <div className="step-list">
+                  {funnelStats.steps.map((step) => {
+                    const resolved = step.succeeded + step.failed;
+                    const widthBase = Math.max(1, funnelStats.steps[0]?.started || step.started || 1);
+                    return (
+                      <div className="step-row" key={step.step}>
+                        <div className="step-name">
+                          <strong>{step.label}</strong>
+                          <code>{step.step}</code>
+                        </div>
+                        <div className="step-bar-wrap">
+                          <div
+                            className="step-bar"
+                            style={{ width: `${Math.max(2, (step.started / widthBase) * 100)}%` }}
+                          >
+                            <div
+                              className="step-bar-ok"
+                              style={{ width: `${resolved ? (step.succeeded / resolved) * 100 : 0}%` }}
+                            />
+                            <div
+                              className="step-bar-fail"
+                              style={{ width: `${resolved ? (step.failed / resolved) * 100 : 0}%` }}
+                            />
+                          </div>
+                        </div>
+                        <div className="step-numbers">
+                          <span title="Số lượt bắt đầu bước này">▶ {step.started}</span>
+                          <span className="ok" title="Thành công">✓ {step.succeeded}</span>
+                          <span className={step.failed ? 'fail' : ''} title="Thất bại">
+                            ✕ {step.failed}
+                          </span>
+                          <span className="pctcell">{step.success_pct}%</span>
+                          <span className="latency" title={`${step.samples} mẫu đo`}>
+                            p50 {formatMs(step.p50_ms)} · p95 {formatMs(step.p95_ms)}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Nguyên nhân lỗi */}
+              {funnelStats.top_failures.length > 0 && (
+                <div className="funnel-block">
+                  <div className="funnel-block-head">
+                    <h3>Nguyên nhân thất bại hay gặp</h3>
+                    <span>% tính trên tổng số bước lỗi</span>
+                  </div>
+                  <div className="reason-table-wrap">
+                    <table className="reason-table">
+                      <thead>
+                        <tr>
+                          <th>Bước</th>
+                          <th>Lý do</th>
+                          <th>Mã lỗi</th>
+                          <th>HTTP</th>
+                          <th style={{ textAlign: 'right' }}>Số lần</th>
+                          <th style={{ textAlign: 'right' }}>Tỷ lệ</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {funnelStats.top_failures.map((row, index) => (
+                          <tr key={`${row.step}-${row.reason}-${row.error_code}-${index}`}>
+                            <td>{row.label || '—'}</td>
+                            <td><code>{row.reason || '—'}</code></td>
+                            <td>{row.error_code || '—'}</td>
+                            <td>{row.status_code || '—'}</td>
+                            <td style={{ textAlign: 'right', fontWeight: 700 }}>{row.count}</td>
+                            <td style={{ textAlign: 'right', color: 'var(--danger)' }}>{row.pct}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Lý do chuyển duyệt tay */}
+              {funnelStats.manual_fallbacks.length > 0 && (
+                <div className="funnel-block">
+                  <div className="funnel-block-head">
+                    <h3>Lý do bị chuyển sang duyệt tay</h3>
+                    <span>Số liệu cho SLA xử lý hồ sơ thủ công</span>
+                  </div>
+                  <ul className="fallback-list">
+                    {funnelStats.manual_fallbacks.map((row, index) => (
+                      <li key={`${row.step}-${row.reason}-${index}`}>
+                        <span className="fallback-step">{row.label || '—'}</span>
+                        <code>{row.reason || 'không ghi lý do'}</code>
+                        <strong>{row.count}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Diễn biến theo ngày */}
+              {funnelStats.series.length > 0 && (
+                <div className="funnel-block">
+                  <div className="funnel-block-head">
+                    <h3>Diễn biến theo ngày</h3>
+                    <span>
+                      Giờ Việt Nam
+                      {funnelStats.history_days
+                        ? ` · ${funnelStats.history_days} ngày lấy từ bảng tổng hợp`
+                        : ''}
+                    </span>
+                  </div>
+                  <div className="series-chart">
+                    {funnelStats.series.map((point) => {
+                      const peak = Math.max(...funnelStats.series.map((p) => p.attempts), 1);
+                      return (
+                        <div className="series-col" key={point.bucket}>
+                          <div
+                            className="series-stack"
+                            style={{ height: `${Math.max(4, (point.attempts / peak) * 100)}%` }}
+                            title={`${point.bucket}: ${point.attempts} lượt thử`}
+                          >
+                            {['success_auto', 'success_manual', 'failed', 'abandoned', 'open'].map(
+                              (key) =>
+                                point[key] > 0 ? (
+                                  <div
+                                    key={key}
+                                    style={{
+                                      height: `${(point[key] / point.attempts) * 100}%`,
+                                      backgroundColor: OUTCOME_COLORS[key],
+                                    }}
+                                  />
+                                ) : null
+                            )}
+                          </div>
+                          <span className="series-value">{point.attempts}</span>
+                          <span className="series-label">{point.bucket.slice(5)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
 
       {/* MODAL: DETAIL FOR API LOG */}
       {selectedLog && (
@@ -2485,6 +3033,146 @@ const res = await monitoredFetch('https://api.example.com/data');`;
           </div>
         </div>
       )}
+      {/* Cấu hình luồng sự kiện cần thống kê */}
+      {funnelSetupOpen && (
+        <div
+          className="modal-overlay"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setFunnelSetupOpen(false);
+          }}
+        >
+          <div className="modal-content" style={{ width: 'min(640px, 100%)' }}>
+            <div className="modal-header">
+              <div className="modal-header-info">
+                <span>Thống kê sự kiện</span>
+                <h2>{funnelDraft.isEdit ? 'Sửa luồng sự kiện' : 'Thêm luồng sự kiện mới'}</h2>
+              </div>
+              <div className="modal-header-actions">
+                <button type="button" className="close-btn" onClick={() => setFunnelSetupOpen(false)}>
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            <div className="modal-body funnel-setup">
+              <p className="funnel-setup-hint">
+                Chỉ cần tiền tố sự kiện. Hệ thống sẽ tự dò sự kiện bắt đầu, kết thúc, và các bước
+                thành công / thất bại từ dữ liệu có thật trong kho, rồi tính % giúp bạn.
+              </p>
+
+              <label className="funnel-field">
+                <span>Mã luồng (không dấu, không khoảng trắng)</span>
+                <input
+                  type="text"
+                  value={funnelDraft.funnel_key}
+                  disabled={funnelDraft.isEdit}
+                  placeholder="ekyb"
+                  onChange={(event) =>
+                    setFunnelDraft((draft) => ({ ...draft, funnel_key: event.target.value }))
+                  }
+                />
+              </label>
+
+              <label className="funnel-field">
+                <span>Tên hiển thị</span>
+                <input
+                  type="text"
+                  value={funnelDraft.name}
+                  placeholder="Định danh doanh nghiệp (eKYB)"
+                  onChange={(event) =>
+                    setFunnelDraft((draft) => ({ ...draft, name: event.target.value }))
+                  }
+                />
+              </label>
+
+              <label className="funnel-field">
+                <span>Tiền tố sự kiện</span>
+                <input
+                  type="text"
+                  value={funnelDraft.event_prefix}
+                  placeholder="ekyb_"
+                  onChange={(event) =>
+                    setFunnelDraft((draft) => ({ ...draft, event_prefix: event.target.value }))
+                  }
+                />
+              </label>
+
+              {eventCatalog.suggestions?.length > 0 && (
+                <div className="funnel-suggestions">
+                  <span>Tiền tố đang có dữ liệu:</span>
+                  <div>
+                    {eventCatalog.suggestions.map((item) => (
+                      <button
+                        key={item.prefix}
+                        type="button"
+                        className="chip-btn"
+                        onClick={() =>
+                          setFunnelDraft((draft) => ({
+                            ...draft,
+                            event_prefix: item.prefix,
+                            funnel_key: draft.funnel_key || item.prefix.replace(/_+$/, ''),
+                            name: draft.name || item.prefix.replace(/_+$/, ''),
+                          }))
+                        }
+                      >
+                        {item.prefix} <em>{item.events}</em>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {funnelDraft.event_prefix && eventCatalog.events?.length > 0 && (
+                <div className="funnel-preview">
+                  <span>Sự kiện sẽ được gom vào luồng này:</span>
+                  <div>
+                    {eventCatalog.events
+                      .filter((item) => item.event_name.startsWith(funnelDraft.event_prefix))
+                      .slice(0, 12)
+                      .map((item) => (
+                        <code key={item.event_name}>
+                          {item.event_name} <em>{item.total}</em>
+                        </code>
+                      ))}
+                    {eventCatalog.events.filter((item) =>
+                      item.event_name.startsWith(funnelDraft.event_prefix)
+                    ).length === 0 && (
+                      <span className="funnel-preview-empty">
+                        Chưa có sự kiện nào khớp tiền tố này trong kho dữ liệu.
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="modal-footer">
+              {funnelDraft.isEdit && (
+                <button
+                  type="button"
+                  className="view-btn"
+                  style={{ color: 'var(--danger)', marginRight: 'auto' }}
+                  onClick={() => deleteFunnel(funnelDraft.funnel_key)}
+                >
+                  Xoá luồng
+                </button>
+              )}
+              <button type="button" className="secondary-btn" onClick={() => setFunnelSetupOpen(false)}>
+                Huỷ
+              </button>
+              <button
+                type="button"
+                className="primary-btn"
+                disabled={savingFunnel || !funnelDraft.funnel_key.trim() || !funnelDraft.name.trim()}
+                onClick={saveFunnel}
+              >
+                {savingFunnel ? 'Đang lưu…' : 'Lưu & xem thống kê'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
