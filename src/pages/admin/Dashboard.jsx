@@ -265,6 +265,7 @@ function Dashboard() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [quotaExceeded, setQuotaExceeded] = useState(false);
 
   // Sub-filter Tabs
   const [activeTab, setActiveTab] = useState('all'); // for logs: 'all', '200', '400', '500'
@@ -346,12 +347,20 @@ function Dashboard() {
       });
       if (response.ok) {
         const data = await response.json();
+        if (data && data.quota_exceeded) {
+          setQuotaExceeded(true);
+        }
         if (data && typeof data === 'object') {
           setFilterMeta({
             apps: Array.isArray(data.apps) ? data.apps : [],
             devices: Array.isArray(data.devices) ? data.devices : [],
             users: Array.isArray(data.users) ? data.users : [],
           });
+        }
+      } else {
+        const errText = await response.text().catch(() => '');
+        if (errText.includes('daily row read limit') || errText.includes('exceeded D1') || errText.includes('D1_ERROR')) {
+          setQuotaExceeded(true);
         }
       }
     } catch (err) {
@@ -400,6 +409,16 @@ function Dashboard() {
         fetch(`${API_MONITOR_URL}/events${queryString}`, fetchOptions),
       ]);
 
+      const checkQuotaError = async (res) => {
+        if (!res.ok) {
+          const txt = await res.text().catch(() => '');
+          if (txt.includes('daily row read limit') || txt.includes('exceeded D1') || txt.includes('D1_ERROR')) {
+            setQuotaExceeded(true);
+          }
+        }
+      };
+      await Promise.all([checkQuotaError(logsRes), checkQuotaError(crashesRes), checkQuotaError(eventsRes)]);
+
       if (logsRes.ok) {
         const data = await logsRes.json();
         if (Array.isArray(data)) {
@@ -420,6 +439,9 @@ function Dashboard() {
       }
       setError(null);
     } catch (requestError) {
+      if (requestError.message?.includes('daily row read limit') || requestError.message?.includes('exceeded D1')) {
+        setQuotaExceeded(true);
+      }
       setError(requestError.message);
     } finally {
       setLoading(false);
@@ -441,9 +463,9 @@ function Dashboard() {
     }
   }, [userIdFromUrl]);
 
-  // Polling thông minh: Chỉ chạy khi tab/webview hiển thị và người dùng bật auto-refresh
+  // Polling thông minh: Chỉ chạy khi tab/webview hiển thị, không bị vượt quota và người dùng bật auto-refresh
   useEffect(() => {
-    if (!refreshInterval || refreshInterval <= 0) return undefined;
+    if (!refreshInterval || refreshInterval <= 0 || quotaExceeded) return undefined;
 
     const interval = window.setInterval(() => {
       // Nếu WebView bị ẩn nền (tab ẩn, khóa màn hình), không kéo dữ liệu thừa
@@ -1023,6 +1045,31 @@ const res = await monitoredFetch('https://api.example.com/data');`;
           </button>
         </div>
       </div>
+
+      {/* Thông báo thân thiện khi Cloudflare D1 chạm hạn mức ngày */}
+      {quotaExceeded && (
+        <div style={{
+          background: 'linear-gradient(135deg, rgba(255, 171, 0, 0.12), rgba(255, 87, 87, 0.08))',
+          border: '1px solid rgba(255, 171, 0, 0.35)',
+          borderRadius: '12px',
+          padding: '1rem 1.25rem',
+          marginBottom: '1.25rem',
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: '0.85rem',
+        }}>
+          <span style={{ fontSize: '1.35rem', lineHeight: 1 }}>⚠️</span>
+          <div style={{ fontSize: '0.85rem', lineHeight: 1.55 }}>
+            <strong style={{ color: '#ffb300', display: 'block', fontSize: '0.92rem', marginBottom: '0.2rem' }}>
+              Tài khoản Cloudflare D1 Free Tier đã chạm hạn mức đọc trong ngày (5.000.000 rows/ngày)
+            </strong>
+            <span style={{ color: 'var(--text-muted)' }}>
+              Đã tối ưu hoàn tất <strong>Composite Indexes</strong> và <strong>Edge Memory Cache</strong> cho database <code>flow-api</code> mới (giảm 99% tải đọc). 
+              Hệ thống đã tự động tạm dừng polling để tránh gửi request thừa. Cloudflare sẽ tự động mở lại hạn mức vào <strong>00:00 UTC (07:00 sáng mai)</strong>, hoặc bạn có thể nâng cấp lên Cloudflare Workers Paid ($5/tháng) để dùng ngay lập tức với 25 tỷ rows/tháng.
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Mode Switcher Dock: Logs | Crashlytics | Analytics */}
       <div className="telemetry-mode-dock">

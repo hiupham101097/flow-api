@@ -146,6 +146,11 @@ const jsonResponse = (data, status = 200, cacheControl = null) => {
   });
 };
 
+const isD1QuotaExceeded = (err) => {
+  const msg = (err?.message || String(err || '')).toLowerCase();
+  return msg.includes('daily row read limit') || msg.includes('exceeded') || msg.includes('quota');
+};
+
 const formatPayload = (val) => {
   if (val === undefined || val === null) return null;
   if (typeof val === 'string') return val;
@@ -252,6 +257,15 @@ export default {
         setCached(cacheKey, filterData, 60);
         return jsonResponse(filterData, 200, 'public, max-age=30, stale-while-revalidate=60');
       } catch (e) {
+        if (isD1QuotaExceeded(e)) {
+          return jsonResponse({
+            quota_exceeded: true,
+            error: 'Tài khoản Cloudflare D1 Free Tier đã dùng hết 5.000.000 lượt đọc trong ngày (Reset lúc 00:00 UTC / 07:00 sáng).',
+            apps: [],
+            devices: [],
+            users: [],
+          }, 200, 'public, max-age=60');
+        }
         return jsonResponse({ error: e.message, apps: [], devices: [], users: [] }, 500);
       }
     }
@@ -279,6 +293,9 @@ export default {
         setCached(cacheKey, results, 30);
         return jsonResponse(results, 200, 'public, max-age=10, stale-while-revalidate=30');
       } catch (e) {
+        if (isD1QuotaExceeded(e)) {
+          return jsonResponse([], 200, 'public, max-age=60');
+        }
         return jsonResponse({ error: e.message }, 500);
       }
     }
@@ -385,6 +402,9 @@ export default {
         setCached(cacheKey, results, 30);
         return jsonResponse(results, 200, 'public, max-age=10, stale-while-revalidate=30');
       } catch (e) {
+        if (isD1QuotaExceeded(e)) {
+          return jsonResponse([], 200, 'public, max-age=60');
+        }
         return jsonResponse({ error: e.message }, 500);
       }
     }
@@ -538,12 +558,18 @@ export default {
         setCached(cacheKey, results, 5);
         return jsonResponse(results, 200, 'public, max-age=5, stale-while-revalidate=10');
       } catch (e) {
+        if (isD1QuotaExceeded(e)) {
+          return jsonResponse([], 200, 'public, max-age=60');
+        }
         try {
           const { results } = await env.DB.prepare(
             'SELECT * FROM api_logs ORDER BY created_at DESC LIMIT 50'
           ).all();
           return jsonResponse(results, 200, 'public, max-age=5');
         } catch (err) {
+          if (isD1QuotaExceeded(err)) {
+            return jsonResponse([], 200, 'public, max-age=60');
+          }
           return jsonResponse({ error: e.message }, 500);
         }
       }
@@ -742,12 +768,18 @@ export default {
         setCached(cacheKey, results, 5);
         return jsonResponse(results, 200, 'public, max-age=5, stale-while-revalidate=10');
       } catch (e) {
+        if (isD1QuotaExceeded(e)) {
+          return jsonResponse([], 200, 'public, max-age=60');
+        }
         try {
           const { results } = await env.DB.prepare(
             'SELECT * FROM app_crashes ORDER BY created_at DESC LIMIT 50'
           ).all();
           return jsonResponse(results, 200, 'public, max-age=5');
         } catch (err) {
+          if (isD1QuotaExceeded(err)) {
+            return jsonResponse([], 200, 'public, max-age=60');
+          }
           return jsonResponse({ error: e.message }, 500);
         }
       }
@@ -895,12 +927,18 @@ export default {
         setCached(cacheKey, results, 5);
         return jsonResponse(results, 200, 'public, max-age=5, stale-while-revalidate=10');
       } catch (e) {
+        if (isD1QuotaExceeded(e)) {
+          return jsonResponse([], 200, 'public, max-age=60');
+        }
         try {
           const { results } = await env.DB.prepare(
             'SELECT * FROM app_events ORDER BY created_at DESC LIMIT 50'
           ).all();
           return jsonResponse(results, 200, 'public, max-age=5');
         } catch (err) {
+          if (isD1QuotaExceeded(err)) {
+            return jsonResponse([], 200, 'public, max-age=60');
+          }
           return jsonResponse({ error: e.message }, 500);
         }
       }
