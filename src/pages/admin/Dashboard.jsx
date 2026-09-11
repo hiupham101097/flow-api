@@ -159,6 +159,22 @@ function hasTelemetryArrayChanged(prev, next) {
   return prev[0]?.id !== next[0]?.id || prev[0]?.created_at !== next[0]?.created_at;
 }
 
+// Chuẩn hoá mọi giá trị về chuỗi thường trước khi so khớp tìm kiếm.
+// D1 có thể trả về số (hoặc null) cho các cột khai báo TEXT — gọi thẳng
+// .toLowerCase() trên các giá trị đó sẽ ném TypeError và làm chết ô tìm kiếm.
+function toSearchText(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value.toLowerCase();
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value).toLowerCase();
+    } catch {
+      return '';
+    }
+  }
+  return String(value).toLowerCase();
+}
+
 // Component phân trang tối ưu bộ nhớ DOM cho WebView
 function PaginationDock({ currentPage, totalItems, pageSize, onPageChange, onPageSizeChange }) {
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
@@ -809,9 +825,9 @@ const res = await monitoredFetch('https://api.example.com/data');`;
   const uniqueDevices = useMemo(() => {
     const set = new Set();
     if (Array.isArray(filterMeta.devices)) {
-      filterMeta.devices.forEach((d) => { if (d) set.add(d); });
+      filterMeta.devices.forEach((d) => { if (d) set.add(String(d)); });
     }
-    logs.forEach((l) => { if (l.device_name) set.add(l.device_name); });
+    logs.forEach((l) => { if (l.device_name) set.add(String(l.device_name)); });
     crashes.forEach((c) => {
       if (c.device_info) {
         try {
@@ -839,14 +855,15 @@ const res = await monitoredFetch('https://api.example.com/data');`;
 
   const uniqueUsers = useMemo(() => {
     const set = new Set();
+    // Luôn ép về chuỗi: giá trị trong dropdown phải cùng kiểu với giá trị đem so khớp
     if (Array.isArray(filterMeta.users)) {
-      filterMeta.users.forEach((u) => { if (u) set.add(u); });
+      filterMeta.users.forEach((u) => { if (u) set.add(String(u)); });
     }
-    logs.forEach((l) => { if (l.user_name) set.add(l.user_name); });
-    crashes.forEach((c) => { if (c.user_name) set.add(c.user_name); });
+    logs.forEach((l) => { if (l.user_name) set.add(String(l.user_name)); });
+    crashes.forEach((c) => { if (c.user_name) set.add(String(c.user_name)); });
     events.forEach((e) => {
-      if (e.user_name) set.add(e.user_name);
-      else if (e.user_id) set.add(e.user_id);
+      if (e.user_name) set.add(String(e.user_name));
+      else if (e.user_id) set.add(String(e.user_id));
     });
     return Array.from(set).filter(Boolean).sort();
   }, [filterMeta.users, logs, crashes, events]);
@@ -868,14 +885,14 @@ const res = await monitoredFetch('https://api.example.com/data');`;
 
       if (!searchTerm) return true;
       const lowerSearch = searchTerm.toLowerCase();
-      const endpointMatch = (log.endpoint || '').toLowerCase().includes(lowerSearch);
-      const statusMatch = String(log.status_code || '').includes(lowerSearch);
-      const errorMatch = (log.error_message || '').toLowerCase().includes(lowerSearch);
-      const appMatch = (log.app_identifier || '').toLowerCase().includes(lowerSearch);
-      const userMatch = (log.user_name || '').toLowerCase().includes(lowerSearch);
-      const deviceMatch = (log.device_name || '').toLowerCase().includes(lowerSearch);
-      const ipMatch = (log.ip_address || '').toLowerCase().includes(lowerSearch);
-      const jobMatch = (log.job_name || '').toLowerCase().includes(lowerSearch);
+      const endpointMatch = toSearchText(log.endpoint).includes(lowerSearch);
+      const statusMatch = toSearchText(log.status_code).includes(lowerSearch);
+      const errorMatch = toSearchText(log.error_message).includes(lowerSearch);
+      const appMatch = toSearchText(log.app_identifier).includes(lowerSearch);
+      const userMatch = toSearchText(log.user_name).includes(lowerSearch);
+      const deviceMatch = toSearchText(log.device_name).includes(lowerSearch);
+      const ipMatch = toSearchText(log.ip_address).includes(lowerSearch);
+      const jobMatch = toSearchText(log.job_name).includes(lowerSearch);
 
       return endpointMatch || statusMatch || errorMatch || appMatch || userMatch || jobMatch || deviceMatch || ipMatch;
     });
@@ -889,18 +906,18 @@ const res = await monitoredFetch('https://api.example.com/data');`;
 
       if (deviceFilter !== 'all') {
         const dLower = deviceFilter.toLowerCase();
-        if (!(crash.device_info || '').toLowerCase().includes(dLower)) return false;
+        if (!toSearchText(crash.device_info).includes(dLower)) return false;
       }
       if (userFilter !== 'all' && crash.user_name !== userFilter) return false;
 
       if (!searchTerm) return true;
       const lower = searchTerm.toLowerCase();
-      const msgMatch = (crash.error_message || '').toLowerCase().includes(lower);
-      const stackMatch = (crash.stack_trace || '').toLowerCase().includes(lower);
-      const appMatch = (crash.app_identifier || '').toLowerCase().includes(lower);
-      const userMatch = (crash.user_name || '').toLowerCase().includes(lower);
-      const jobMatch = (crash.job_name || '').toLowerCase().includes(lower);
-      const deviceMatch = (crash.device_info || '').toLowerCase().includes(lower);
+      const msgMatch = toSearchText(crash.error_message).includes(lower);
+      const stackMatch = toSearchText(crash.stack_trace).includes(lower);
+      const appMatch = toSearchText(crash.app_identifier).includes(lower);
+      const userMatch = toSearchText(crash.user_name).includes(lower);
+      const jobMatch = toSearchText(crash.job_name).includes(lower);
+      const deviceMatch = toSearchText(crash.device_info).includes(lower);
 
       return msgMatch || stackMatch || appMatch || userMatch || jobMatch || deviceMatch;
     });
@@ -915,20 +932,20 @@ const res = await monitoredFetch('https://api.example.com/data');`;
 
       if (deviceFilter !== 'all') {
         const dLower = deviceFilter.toLowerCase();
-        if (!(event.device_info || '').toLowerCase().includes(dLower)) return false;
+        if (!toSearchText(event.device_info).includes(dLower)) return false;
       }
       if (userFilter !== 'all') {
-        if (event.user_name !== userFilter && event.user_id !== userFilter) return false;
+        if (String(event.user_name ?? '') !== userFilter && String(event.user_id ?? '') !== userFilter) return false;
       }
 
       if (!searchTerm) return true;
       const lower = searchTerm.toLowerCase();
-      const nameMatch = (event.event_name || '').toLowerCase().includes(lower);
-      const screenMatch = (event.screen_name || '').toLowerCase().includes(lower);
-      const userMatch = (event.user_id || '').toLowerCase().includes(lower) || (event.user_name || '').toLowerCase().includes(lower);
-      const appMatch = (event.app_identifier || '').toLowerCase().includes(lower);
-      const jobMatch = (event.job_name || '').toLowerCase().includes(lower);
-      const paramMatch = (event.parameters || '').toLowerCase().includes(lower);
+      const nameMatch = toSearchText(event.event_name).includes(lower);
+      const screenMatch = toSearchText(event.screen_name).includes(lower);
+      const userMatch = toSearchText(event.user_id).includes(lower) || toSearchText(event.user_name).includes(lower);
+      const appMatch = toSearchText(event.app_identifier).includes(lower);
+      const jobMatch = toSearchText(event.job_name).includes(lower);
+      const paramMatch = toSearchText(event.parameters).includes(lower);
 
       return nameMatch || screenMatch || userMatch || appMatch || jobMatch || paramMatch;
     });

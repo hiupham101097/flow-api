@@ -737,13 +737,25 @@ export default {
         const userParam = url.searchParams.get('user');
         const limit = Math.min(Number(url.searchParams.get('limit')) || 150, 500);
 
+        // Liệt kê cột tường minh thay vì e.*: "u.id as user_id" từng đè lên
+        // e.user_id và trả về số, khiến ô tìm kiếm ở Dashboard ném TypeError.
+        // COALESCE + CAST giữ user_id luôn là chuỗi, ưu tiên id do app gửi lên.
         let query = `
           SELECT 
-            e.*,
+            e.id,
+            e.job_id,
+            e.app_identifier,
+            e.event_name,
+            e.event_type,
+            e.screen_name,
+            e.parameters,
+            e.device_info,
+            e.created_at,
             j.name as job_name,
             j.type as job_type,
-            u.id as user_id,
-            u.name as user_name
+            u.id as owner_id,
+            u.name as user_name,
+            COALESCE(e.user_id, CAST(u.id AS TEXT)) as user_id
           FROM app_events e
           LEFT JOIN jobs j ON (e.job_id IS NOT NULL AND e.job_id = j.id) 
                            OR (e.app_identifier IS NOT NULL AND e.app_identifier = j.app_identifier)
