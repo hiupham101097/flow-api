@@ -88,3 +88,49 @@ CREATE INDEX IF NOT EXISTS idx_crashes_job_created ON app_crashes(job_id, create
 CREATE INDEX IF NOT EXISTS idx_events_app_created ON app_events(app_identifier, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_events_job_created ON app_events(job_id, created_at DESC);
 
+-- Chỉ mục phục vụ danh sách telemetry: khoá theo id chứ không phải created_at,
+-- vì các endpoint danh sách đều ORDER BY id DESC. Một index này lo cả việc lọc
+-- lẫn việc sắp xếp nên SQLite không phải dựng b-tree tạm.
+CREATE INDEX IF NOT EXISTS idx_logs_app_id_desc ON api_logs(app_identifier, id DESC);
+CREATE INDEX IF NOT EXISTS idx_logs_job_id_desc ON api_logs(job_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_crashes_app_id_desc ON app_crashes(app_identifier, id DESC);
+CREATE INDEX IF NOT EXISTS idx_events_app_id_desc ON app_events(app_identifier, id DESC);
+CREATE INDEX IF NOT EXISTS idx_events_name_created ON app_events(event_name, created_at DESC);
+
+-- Cột định danh người dùng / thiết bị cho sự kiện (app đã gửi từ lâu)
+ALTER TABLE app_events ADD COLUMN user_name TEXT;
+ALTER TABLE app_events ADD COLUMN device_name TEXT;
+
+-- Định nghĩa luồng sự kiện cần thống kê (ví dụ: eKYB)
+CREATE TABLE IF NOT EXISTS event_funnels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    funnel_key TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    app_identifier TEXT,
+    event_prefix TEXT,
+    config TEXT NOT NULL,
+    status TEXT DEFAULT 'active' CHECK(status IN ('active', 'inactive')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Số liệu chốt theo ngày, giữ lịch sử sau khi cron xoá dữ liệu thô.
+-- app_identifier lưu chuỗi rỗng thay vì NULL: SQLite coi hai NULL là khác nhau
+-- trong UNIQUE index nên dùng NULL sẽ sinh bản ghi trùng.
+CREATE TABLE IF NOT EXISTS event_funnel_daily (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    funnel_key TEXT NOT NULL,
+    app_identifier TEXT,
+    day TEXT NOT NULL,
+    attempts INTEGER DEFAULT 0,
+    outcome_auto INTEGER DEFAULT 0,
+    outcome_manual INTEGER DEFAULT 0,
+    outcome_failed INTEGER DEFAULT 0,
+    outcome_abandoned INTEGER DEFAULT 0,
+    outcome_open INTEGER DEFAULT 0,
+    steps_json TEXT,
+    reasons_json TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(funnel_key, app_identifier, day)
+);
+
+CREATE INDEX IF NOT EXISTS idx_funnel_daily_lookup ON event_funnel_daily(funnel_key, day);
