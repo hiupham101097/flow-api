@@ -1440,7 +1440,8 @@ export default {
           path.startsWith('/settings') ||
           path.startsWith('/telemetry/batch'))) ||
       path.startsWith('/funnels') ||
-      path.startsWith('/settings')
+      path.startsWith('/settings') ||
+      path.startsWith('/issues')
     ) {
       await ensureSchema(env.DB);
     }
@@ -3061,19 +3062,29 @@ export default {
           countParams.push(Number(jobId));
         }
 
-        const countsRes = await env.DB.prepare(`
+        const countsStmt = env.DB.prepare(`
           SELECT 
             COUNT(*) AS total,
-            SUM(CASE WHEN status = 'unresolved' THEN 1 ELSE 0 END) AS unresolved,
-            SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END) AS resolved,
-            SUM(CASE WHEN status = 'ignored' THEN 1 ELSE 0 END) AS ignored
+            COALESCE(SUM(CASE WHEN status = 'unresolved' THEN 1 ELSE 0 END), 0) AS unresolved,
+            COALESCE(SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END), 0) AS resolved,
+            COALESCE(SUM(CASE WHEN status = 'ignored' THEN 1 ELSE 0 END), 0) AS ignored
           FROM issues
           ${countFilter}
-        `).bind(...countParams).first();
+        `);
+        const countsRes = countParams.length > 0 ? await countsStmt.bind(...countParams).first() : await countsStmt.first();
+
+        const dims = await loadDimensions(env.DB);
+        const decoratedIssues = (issuesList || []).map((issue) => {
+          const job = dims.jobs.find((j) => String(j.id) === String(issue.job_id) || j.app_identifier === issue.app_identifier);
+          return {
+            ...issue,
+            job_name: job?.name || issue.app_identifier,
+          };
+        });
 
         return jsonResponse({
-          issues: issuesList || [],
-          total: (issuesList || []).length,
+          issues: decoratedIssues,
+          total: decoratedIssues.length,
           pagination: { limit, offset },
           counts: {
             total: countsRes?.total || 0,
