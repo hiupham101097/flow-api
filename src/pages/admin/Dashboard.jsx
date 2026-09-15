@@ -1,6 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import '../../styles/global.css';
+import TelegramSettingsModal from '../../components/dashboard/TelegramSettingsModal';
+import UserJourneyTimeline from '../../components/dashboard/UserJourneyTimeline';
+import SystemHealthSummary from '../../components/dashboard/SystemHealthSummary';
+import { exportToCsv } from '../../utils/exportCsv';
 
 const API_MONITOR_URL = import.meta.env.VITE_WORKER_URL || 'https://flow-api.hieupham101097.workers.dev';
 
@@ -343,6 +347,20 @@ function Dashboard() {
   const [eventCatalog, setEventCatalog] = useState({ events: [], suggestions: [] });
   const [funnelDraft, setFunnelDraft] = useState({ funnel_key: '', name: '', event_prefix: '', app_identifier: '' });
   const [savingFunnel, setSavingFunnel] = useState(false);
+
+  // Telegram Alerting & User Journey Timeline states
+  const [telegramModalOpen, setTelegramModalOpen] = useState(false);
+  const [timelineUser, setTimelineUser] = useState('');
+  const [timelineDevice, setTimelineDevice] = useState('');
+  const [timelineApp, setTimelineApp] = useState('');
+
+  const viewUserTimeline = ({ user = '', device = '', app = '' }) => {
+    setTimelineUser(user);
+    setTimelineDevice(device);
+    setTimelineApp(app);
+    setTelemetryMode('timeline');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   const copyToClipboard = async (value, item) => {
     try {
@@ -1250,6 +1268,16 @@ const res = await monitoredFetch('https://api.example.com/data');`;
           <button
             type="button"
             className="secondary-btn"
+            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+            onClick={() => setTelegramModalOpen(true)}
+            title="Cài đặt thông báo sự cố qua Telegram Bot"
+          >
+            <span>🔔</span>
+            <span>Cảnh báo Telegram</span>
+          </button>
+          <button
+            type="button"
+            className="secondary-btn"
             onClick={() => setIntegrationOpen((prev) => !prev)}
           >
             🔌 Cấu hình SDK ({activeUserJob?.job_type === 'web' ? 'Web' : 'App'})
@@ -1290,7 +1318,10 @@ const res = await monitoredFetch('https://api.example.com/data');`;
         </div>
       )}
 
-      {/* Mode Switcher Dock: Logs | Crashlytics | Analytics */}
+      {/* 24-hour System Health Summary */}
+      <SystemHealthSummary selectedApp={selectedFilter !== 'all' ? selectedFilter : ''} />
+
+      {/* Mode Switcher Dock: Logs | Crashlytics | Analytics | Funnels | Timeline */}
       <div className="telemetry-mode-dock">
         <button
           type="button"
@@ -1331,6 +1362,18 @@ const res = await monitoredFetch('https://api.example.com/data');`;
         >
           <span>📊 Thống kê sự kiện</span>
           <span className="mode-badge">{funnels.length}</span>
+        </button>
+        <button
+          type="button"
+          className={`mode-pill-btn ${telemetryMode === 'timeline' ? 'active' : ''}`}
+          onClick={() => { setTelemetryMode('timeline'); setSearchTerm(''); }}
+        >
+          <span>🧭 Hành trình User</span>
+          {timelineUser && (
+            <span className="mode-badge" style={{ backgroundColor: 'var(--accent-strong)', color: '#fff' }}>
+              {timelineUser.slice(0, 10)}
+            </span>
+          )}
         </button>
       </div>
 
@@ -1527,186 +1570,222 @@ const res = await monitoredFetch('https://api.example.com/data');`;
         </section>
       )}
 
-      {/* Integration Setup Dock */}
+      {/* MODAL DIALOG: CẤU HÌNH SDK TELEMETRY */}
       {integrationOpen && (
-        <section
-          id="integration-setup"
-          className="integration-dock is-open"
-          style={{ marginBottom: '1.75rem' }}
+        <div
+          className="modal-overlay"
+          onClick={() => setIntegrationOpen(false)}
+          style={{ zIndex: 1100 }}
         >
-          <div className="integration-bar">
-            <div className="integration-title-group">
-              <span className="platform-tag">
-                {activeUserJob?.job_type === 'web' ? '🌐 Web SDK' : '📱 Flutter & Web Telemetry'}
-              </span>
-              <div>
-                <h2>Kết nối Telemetry tự động (Logs, Crashlytics & Analytics)</h2>
-                <p>
-                  Mã App ID hiện tại: <code>{currentAppId}</code> · Endpoint: <code>{API_MONITOR_URL}</code>
+          <div
+            className="modal-content"
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: 'min(920px, 95%)', maxHeight: '88vh', display: 'flex', flexDirection: 'column' }}
+          >
+            <div className="modal-header">
+              <div className="modal-header-info">
+                <span className="platform-tag" style={{ display: 'inline-block', marginBottom: '0.25rem' }}>
+                  {activeUserJob?.job_type === 'web' ? '🌐 Web SDK' : '📱 Flutter & Web Telemetry'}
+                </span>
+                <h2 style={{ fontSize: '1.2rem', fontWeight: 700, margin: 0 }}>
+                  Cấu hình SDK & Kết nối Telemetry
+                </h2>
+                <p style={{ margin: '0.25rem 0 0', fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                  App ID: <code style={{ color: 'var(--accent)' }}>{currentAppId}</code> · Endpoint: <code>{API_MONITOR_URL}</code>
                 </p>
               </div>
+              <div className="modal-header-actions">
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  onClick={() => copyToClipboard(API_MONITOR_URL, 'url')}
+                  style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem' }}
+                >
+                  {copiedItem === 'url' ? '✓ Đã chép' : '📋 Copy URL Server'}
+                </button>
+                <button
+                  type="button"
+                  className="close-btn"
+                  onClick={() => setIntegrationOpen(false)}
+                  aria-label="Đóng"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
-            <div className="integration-actions">
-              <button type="button" className="text-btn" onClick={() => copyToClipboard(API_MONITOR_URL, 'url')}>
-                {copiedItem === 'url' ? 'Đã sao chép' : 'Copy URL Server'}
-              </button>
-              <button
-                type="button"
-                className="collapse-btn"
-                onClick={() => setIntegrationOpen(false)}
-              >
-                Đóng hướng dẫn
-              </button>
-            </div>
-          </div>
 
-          <div className="integration-content">
-            <nav className="setup-tabs">
-              <button
-                type="button"
-                className={setupTab === 'crashlytics' ? 'active' : ''}
-                onClick={() => setSetupTab('crashlytics')}
-              >
-                <span>01</span><strong>Flutter Crashlytics</strong><small>Bắt Fatal & Non-fatal</small>
-              </button>
-              <button
-                type="button"
-                className={setupTab === 'analytics' ? 'active' : ''}
-                onClick={() => setSetupTab('analytics')}
-              >
-                <span>02</span><strong>Flutter Analytics</strong><small>Events & Screen Views</small>
-              </button>
-              <button
-                type="button"
-                className={setupTab === 'client' ? 'active' : ''}
-                onClick={() => setSetupTab('client')}
-              >
-                <span>03</span><strong>Flutter HTTP</strong><small>LoggingClient</small>
-              </button>
-              <button
-                type="button"
-                className={setupTab === 'dio' ? 'active' : ''}
-                onClick={() => setSetupTab('dio')}
-              >
-                <span>04</span><strong>Flutter Dio</strong><small>ApiLogger.record()</small>
-              </button>
-              <button
-                type="button"
-                className={setupTab === 'axios' ? 'active' : ''}
-                onClick={() => setSetupTab('axios')}
-              >
-                <span>05</span><strong>Web Axios</strong><small>setupAxiosMonitor</small>
-              </button>
-              <button
-                type="button"
-                className={setupTab === 'fetch' ? 'active' : ''}
-                onClick={() => setSetupTab('fetch')}
-              >
-                <span>06</span><strong>Web Fetch</strong><small>createMonitoredFetch</small>
-              </button>
-            </nav>
+            <div className="modal-body" style={{ overflowY: 'auto', padding: '1.25rem', flex: 1 }}>
+              <div className="integration-content" style={{ margin: 0 }}>
+                <nav className="setup-tabs">
+                  <button
+                    type="button"
+                    className={setupTab === 'crashlytics' ? 'active' : ''}
+                    onClick={() => setSetupTab('crashlytics')}
+                  >
+                    <span>01</span><strong>Flutter Crashlytics</strong><small>Bắt Fatal & Non-fatal</small>
+                  </button>
+                  <button
+                    type="button"
+                    className={setupTab === 'analytics' ? 'active' : ''}
+                    onClick={() => setSetupTab('analytics')}
+                  >
+                    <span>02</span><strong>Flutter Analytics</strong><small>Events & Screen Views</small>
+                  </button>
+                  <button
+                    type="button"
+                    className={setupTab === 'client' ? 'active' : ''}
+                    onClick={() => setSetupTab('client')}
+                  >
+                    <span>03</span><strong>Flutter HTTP</strong><small>LoggingClient</small>
+                  </button>
+                  <button
+                    type="button"
+                    className={setupTab === 'dio' ? 'active' : ''}
+                    onClick={() => setSetupTab('dio')}
+                  >
+                    <span>04</span><strong>Flutter Dio</strong><small>ApiLogger.record()</small>
+                  </button>
+                  <button
+                    type="button"
+                    className={setupTab === 'axios' ? 'active' : ''}
+                    onClick={() => setSetupTab('axios')}
+                  >
+                    <span>05</span><strong>Web Axios</strong><small>setupAxiosMonitor</small>
+                  </button>
+                  <button
+                    type="button"
+                    className={setupTab === 'fetch' ? 'active' : ''}
+                    onClick={() => setSetupTab('fetch')}
+                  >
+                    <span>06</span><strong>Web Fetch</strong><small>createMonitoredFetch</small>
+                  </button>
+                </nav>
 
-            <div className="setup-content">
-              {setupTab === 'crashlytics' && (
-                <div className="setup-pane">
-                  <div className="pane-heading">
-                    <h3>1. Tích hợp Crashlytics (Bắt sập App & Ngoại lệ)</h3>
-                    <p>Hook trực tiếp vào <code>FlutterError.onError</code> và <code>PlatformDispatcher.instance.onError</code>:</p>
-                  </div>
-                  <CodeBlock
-                    label="Flutter Crashlytics Hook"
-                    value={flutterCrashlyticsSnippet}
-                    copyKey="crashlytics"
-                    copiedItem={copiedItem}
-                    onCopy={copyToClipboard}
-                  />
-                </div>
-              )}
-
-              {setupTab === 'analytics' && (
-                <div className="setup-pane">
-                  <div className="pane-heading">
-                    <h3>2. Tích hợp Analytics (Sự kiện & Màn hình người dùng)</h3>
-                    <p>Theo dõi luồng hành động người dùng, đăng nhập, click, xem màn hình song song với Firebase:</p>
-                  </div>
-                  <CodeBlock
-                    label="Flutter Analytics Event & Screen"
-                    value={flutterAnalyticsSnippet}
-                    copyKey="analytics"
-                    copiedItem={copiedItem}
-                    onCopy={copyToClipboard}
-                  />
-                </div>
-              )}
-
-              {setupTab === 'client' && (
-                <div className="setup-pane setup-pane-split">
-                  <div>
-                    <div className="pane-heading">
-                      <h3>3. Dùng LoggingClient cho package `http` (Flutter)</h3>
-                      <p>Tự động ghi lại payload 200 và chẩn đoán lỗi 400/500 kèm mã định danh theo dõi.</p>
+                <div className="setup-content">
+                  {setupTab === 'crashlytics' && (
+                    <div className="setup-pane">
+                      <div className="pane-heading">
+                        <h3>1. Tích hợp Crashlytics (Bắt sập App & Ngoại lệ)</h3>
+                        <p>Hook trực tiếp vào <code>FlutterError.onError</code> và <code>PlatformDispatcher.instance.onError</code>:</p>
+                      </div>
+                      <CodeBlock
+                        label="Flutter Crashlytics Hook"
+                        value={flutterCrashlyticsSnippet}
+                        copyKey="crashlytics"
+                        copiedItem={copiedItem}
+                        onCopy={copyToClipboard}
+                      />
                     </div>
-                  </div>
-                  <CodeBlock
-                    label="Flutter http Client"
-                    value={flutterClientSnippet}
-                    copyKey="client"
-                    copiedItem={copiedItem}
-                    onCopy={copyToClipboard}
-                  />
-                </div>
-              )}
+                  )}
 
-              {setupTab === 'dio' && (
-                <div className="setup-pane">
-                  <div className="pane-heading">
-                    <h3>4. Tích hợp với package `Dio` (Flutter)</h3>
-                    <p>Gắn <code>ApiLogger.record()</code> vào interceptor với <code>appId</code>:</p>
-                  </div>
-                  <CodeBlock
-                    label="Dio Interceptor"
-                    value={flutterDioSnippet}
-                    copyKey="dio"
-                    copiedItem={copiedItem}
-                    onCopy={copyToClipboard}
-                  />
-                </div>
-              )}
+                  {setupTab === 'analytics' && (
+                    <div className="setup-pane">
+                      <div className="pane-heading">
+                        <h3>2. Tích hợp Analytics (Sự kiện & Màn hình người dùng)</h3>
+                        <p>Theo dõi luồng hành động người dùng, đăng nhập, click, xem màn hình song song với Firebase:</p>
+                      </div>
+                      <CodeBlock
+                        label="Flutter Analytics Event & Screen"
+                        value={flutterAnalyticsSnippet}
+                        copyKey="analytics"
+                        copiedItem={copiedItem}
+                        onCopy={copyToClipboard}
+                      />
+                    </div>
+                  )}
 
-              {setupTab === 'axios' && (
-                <div className="setup-pane">
-                  <div className="pane-heading">
-                    <h3>5. Tích hợp Axios Interceptor (Web App / React / Vue)</h3>
-                    <p>Gắn vào instance Axios một lần duy nhất khi ứng dụng khởi chạy:</p>
-                  </div>
-                  <CodeBlock
-                    label="Axios Monitor Setup"
-                    value={webAxiosSnippet}
-                    copyKey="axios"
-                    copiedItem={copiedItem}
-                    onCopy={copyToClipboard}
-                  />
-                </div>
-              )}
+                  {setupTab === 'client' && (
+                    <div className="setup-pane setup-pane-split">
+                      <div>
+                        <div className="pane-heading">
+                          <h3>3. Dùng LoggingClient cho package `http` (Flutter)</h3>
+                          <p>Tự động ghi lại payload 200 và chẩn đoán lỗi 400/500 kèm mã định danh theo dõi.</p>
+                        </div>
+                      </div>
+                      <CodeBlock
+                        label="Flutter http Client"
+                        value={flutterClientSnippet}
+                        copyKey="client"
+                        copiedItem={copiedItem}
+                        onCopy={copyToClipboard}
+                      />
+                    </div>
+                  )}
 
-              {setupTab === 'fetch' && (
-                <div className="setup-pane">
-                  <div className="pane-heading">
-                    <h3>6. Tích hợp Monitored Fetch (Web Vanilla / Next.js)</h3>
-                    <p>Sử dụng wrapper fetch để tự động đo latency và gửi telemetry:</p>
-                  </div>
-                  <CodeBlock
-                    label="Monitored Fetch"
-                    value={webFetchSnippet}
-                    copyKey="fetch"
-                    copiedItem={copiedItem}
-                    onCopy={copyToClipboard}
-                  />
+                  {setupTab === 'dio' && (
+                    <div className="setup-pane">
+                      <div className="pane-heading">
+                        <h3>4. Tích hợp với package `Dio` (Flutter)</h3>
+                        <p>Gắn <code>ApiLogger.record()</code> vào interceptor với <code>appId</code>:</p>
+                      </div>
+                      <CodeBlock
+                        label="Dio Interceptor"
+                        value={flutterDioSnippet}
+                        copyKey="dio"
+                        copiedItem={copiedItem}
+                        onCopy={copyToClipboard}
+                      />
+                    </div>
+                  )}
+
+                  {setupTab === 'axios' && (
+                    <div className="setup-pane">
+                      <div className="pane-heading">
+                        <h3>5. Tích hợp Axios Interceptor (Web App / React / Vue)</h3>
+                        <p>Gắn vào instance Axios một lần duy nhất khi ứng dụng khởi chạy:</p>
+                      </div>
+                      <CodeBlock
+                        label="Axios Monitor Setup"
+                        value={webAxiosSnippet}
+                        copyKey="axios"
+                        copiedItem={copiedItem}
+                        onCopy={copyToClipboard}
+                      />
+                    </div>
+                  )}
+
+                  {setupTab === 'fetch' && (
+                    <div className="setup-pane">
+                      <div className="pane-heading">
+                        <h3>6. Tích hợp Monitored Fetch (Web Vanilla / Next.js)</h3>
+                        <p>Sử dụng wrapper fetch để tự động đo latency và gửi telemetry:</p>
+                      </div>
+                      <CodeBlock
+                        label="Monitored Fetch"
+                        value={webFetchSnippet}
+                        copyKey="fetch"
+                        copiedItem={copiedItem}
+                        onCopy={copyToClipboard}
+                      />
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
+            </div>
+
+            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.85rem 1.25rem', borderTop: '1px solid var(--line)', background: 'var(--surface-muted)' }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                💡 Tip: Sao chép đoạn code tương ứng và dán trực tiếp vào dự án của bạn
+              </span>
+              <div style={{ display: 'flex', gap: '0.65rem' }}>
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  onClick={() => copyToClipboard(API_MONITOR_URL, 'url')}
+                >
+                  {copiedItem === 'url' ? '✓ Đã sao chép' : '📋 Copy URL Server'}
+                </button>
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={() => setIntegrationOpen(false)}
+                >
+                  Đóng dialog
+                </button>
+              </div>
             </div>
           </div>
-        </section>
+        </div>
       )}
 
       {/* MODE 1: LOGS PANEL */}
@@ -1793,6 +1872,16 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                   onChange={(event) => setSearchTerm(event.target.value)}
                 />
               </label>
+
+              <button
+                type="button"
+                className="secondary-btn"
+                style={{ padding: '0.45rem 0.8rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                onClick={() => exportToCsv('logs', filteredLogs)}
+                title="Xuất danh sách API Logs đang xem ra file CSV"
+              >
+                📥 Xuất CSV
+              </button>
             </div>
           </div>
 
@@ -1916,7 +2005,23 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                         </span>
                       </td>
                       <td className="duration-cell">{log.duration_ms || 0} ms</td>
-                      <td className="action-cell">
+                      <td className="action-cell" style={{ display: 'flex', gap: '0.35rem', justifyContent: 'flex-end' }}>
+                        <button
+                          type="button"
+                          className="view-btn"
+                          style={{ fontSize: '0.72rem', padding: '0.25rem 0.45rem', background: 'rgba(125, 156, 255, 0.12)', color: 'var(--accent)' }}
+                          title="Xem toàn bộ hành trình của User / Thiết bị này"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            viewUserTimeline({
+                              user: log.user_name || '',
+                              device: log.device_name || '',
+                              app: log.app_identifier || '',
+                            });
+                          }}
+                        >
+                          🐾
+                        </button>
                         <button
                           type="button"
                           className="view-btn"
@@ -2021,6 +2126,16 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                   onChange={(event) => setSearchTerm(event.target.value)}
                 />
               </label>
+
+              <button
+                type="button"
+                className="secondary-btn"
+                style={{ padding: '0.45rem 0.8rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                onClick={() => exportToCsv('crashes', filteredCrashes)}
+                title="Xuất danh sách Crashes đang xem ra file CSV"
+              >
+                📥 Xuất CSV
+              </button>
             </div>
           </div>
 
@@ -2103,7 +2218,23 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                           <span className="device-chip">📱 Mobile</span>
                         )}
                       </td>
-                      <td className="action-cell">
+                      <td className="action-cell" style={{ display: 'flex', gap: '0.35rem', justifyContent: 'flex-end' }}>
+                        <button
+                          type="button"
+                          className="view-btn"
+                          style={{ fontSize: '0.72rem', padding: '0.25rem 0.45rem', background: 'rgba(125, 156, 255, 0.12)', color: 'var(--accent)' }}
+                          title="Xem toàn bộ hành trình trước khi xảy ra sự cố này"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            viewUserTimeline({
+                              user: crash.user_name || '',
+                              device: (typeof deviceInfoParsed === 'object' ? deviceInfoParsed.model || deviceInfoParsed.device_name : '') || '',
+                              app: crash.app_identifier || '',
+                            });
+                          }}
+                        >
+                          🐾
+                        </button>
                         <button
                           type="button"
                           className="view-btn"
@@ -2208,6 +2339,16 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                   onChange={(event) => setSearchTerm(event.target.value)}
                 />
               </label>
+
+              <button
+                type="button"
+                className="secondary-btn"
+                style={{ padding: '0.45rem 0.8rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                onClick={() => exportToCsv('events', filteredEvents)}
+                title="Xuất danh sách Analytics Events đang xem ra file CSV"
+              >
+                📥 Xuất CSV
+              </button>
             </div>
           </div>
 
@@ -2306,7 +2447,23 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                           <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem' }}>Không có params</span>
                         )}
                       </td>
-                      <td className="action-cell">
+                      <td className="action-cell" style={{ display: 'flex', gap: '0.35rem', justifyContent: 'flex-end' }}>
+                        <button
+                          type="button"
+                          className="view-btn"
+                          style={{ fontSize: '0.72rem', padding: '0.25rem 0.45rem', background: 'rgba(125, 156, 255, 0.12)', color: 'var(--accent)' }}
+                          title="Xem toàn bộ hành trình của người dùng này"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            viewUserTimeline({
+                              user: event.user_name || event.user_id || '',
+                              device: event.device_name || '',
+                              app: event.app_identifier || '',
+                            });
+                          }}
+                        >
+                          🐾
+                        </button>
                         <button
                           type="button"
                           className="view-btn"
@@ -2608,6 +2765,20 @@ const res = await monitoredFetch('https://api.example.com/data');`;
               )}
             </div>
           )}
+        </section>
+      )}
+
+      {/* 5. User Journey Timeline Panel */}
+      {telemetryMode === 'timeline' && (
+        <section className="log-panel" style={{ background: 'none', border: 'none', padding: 0 }}>
+          <UserJourneyTimeline
+            initialUser={timelineUser}
+            initialDevice={timelineDevice}
+            initialApp={timelineApp || (selectedFilter !== 'all' ? selectedFilter : '')}
+            availableUsers={uniqueUsers}
+            availableDevices={uniqueDevices}
+            onOpenDetail={openDetail}
+          />
         </section>
       )}
 
@@ -3172,6 +3343,12 @@ const res = await monitoredFetch('https://api.example.com/data');`;
           </div>
         </div>
       )}
+
+      {/* MODAL: TELEGRAM ALERT SETTINGS */}
+      <TelegramSettingsModal
+        isOpen={telegramModalOpen}
+        onClose={() => setTelegramModalOpen(false)}
+      />
 
     </div>
   );

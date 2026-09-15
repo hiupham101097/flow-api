@@ -132,10 +132,47 @@ CREATE TABLE IF NOT EXISTS event_funnel_daily (
 
 CREATE INDEX IF NOT EXISTS idx_funnel_daily_lookup ON event_funnel_daily(funnel_key, day);
 
--- ĐẶT CUỐI FILE CÓ CHỦ ĐÍCH: SQLite không có ADD COLUMN IF NOT EXISTS, nên hai
--- lệnh này sẽ báo "duplicate column name" nếu chạy file lần thứ hai. wrangler
--- d1 execute dừng ngay ở lỗi đầu tiên, nên phải để chúng sau mọi CREATE để lần
--- chạy lại vẫn tạo đủ bảng rồi mới dừng. Lỗi ở đây là vô hại, bỏ qua được.
--- (Worker cũng tự thêm hai cột này trong ensureSchema, có bọc try/catch.)
+-- Bảng Cấu hình hệ thống (Telegram Bot, cảnh báo, tùy chọn)
+CREATE TABLE IF NOT EXISTS system_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================
+-- GIAI ĐOẠN 1: BẢNG QUẢN LÝ NHÓM SỰ CỐ (ISSUES - APM MODEL)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS issues (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fingerprint TEXT UNIQUE NOT NULL,
+    job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+    app_identifier TEXT NOT NULL,
+    type TEXT NOT NULL CHECK(type IN ('crash', 'api_error')),
+    title TEXT NOT NULL,
+    culprit TEXT,
+    status TEXT DEFAULT 'unresolved' CHECK(status IN ('unresolved', 'resolved', 'ignored')),
+    severity TEXT DEFAULT 'error' CHECK(severity IN ('fatal', 'error', 'warning', 'info')),
+    first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    total_occurrences INTEGER DEFAULT 1,
+    user_count INTEGER DEFAULT 1,
+    sample_payload TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_issues_fingerprint ON issues(fingerprint);
+CREATE INDEX IF NOT EXISTS idx_issues_app_status ON issues(app_identifier, status);
+CREATE INDEX IF NOT EXISTS idx_issues_job_status ON issues(job_id, status);
+CREATE INDEX IF NOT EXISTS idx_issues_last_seen ON issues(last_seen DESC);
+CREATE INDEX IF NOT EXISTS idx_issues_occurrences ON issues(total_occurrences DESC);
+
+-- ĐẶT CUỐI FILE CÓ CHỦ ĐÍCH: SQLite không có ADD COLUMN IF NOT EXISTS, nên các
+-- lệnh ALTER TABLE này sẽ báo "duplicate column name" nếu chạy lại.
+-- Wrangler d1 execute dừng ngay ở lỗi đầu tiên nên phải để chúng sau mọi CREATE.
+-- (Worker tự thêm các cột này trong ensureSchema với try/catch an toàn).
 ALTER TABLE app_events ADD COLUMN user_name TEXT;
 ALTER TABLE app_events ADD COLUMN device_name TEXT;
+ALTER TABLE app_crashes ADD COLUMN issue_id INTEGER;
+ALTER TABLE app_crashes ADD COLUMN fingerprint TEXT;
+ALTER TABLE api_logs ADD COLUMN issue_id INTEGER;
+ALTER TABLE api_logs ADD COLUMN fingerprint TEXT;

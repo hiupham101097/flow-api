@@ -455,5 +455,34 @@ class AppTelemetry {
         )
         .catchError((_) => http.Response('', 500));
   }
+
+  /// Gửi gói Telemetry hàng loạt (Batch Ingestion) tới server để giảm 90% HTTP requests
+  static Future<bool> sendBatch({
+    List<Map<String, dynamic>> logs = const [],
+    List<Map<String, dynamic>> crashes = const [],
+    List<Map<String, dynamic>> events = const [],
+    String? appId,
+    String? serverUrl,
+  }) async {
+    final targetUrl = serverUrl ?? '$defaultEndpoint/telemetry/batch';
+    final effectiveAppId = appId ?? _defaultAppId;
+    try {
+      final res = await http.post(
+        Uri.parse(targetUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'app_id': effectiveAppId,
+          'device_name': AppTelemetry.deviceName,
+          'user_name': AppTelemetry.userName,
+          'logs': logs,
+          'crashes': crashes,
+          'events': events,
+        }),
+      );
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
 }
 

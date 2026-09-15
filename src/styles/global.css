@@ -1086,14 +1086,17 @@ tbody tr.row-error:hover {
   font-size: 0.76rem;
 }
 
-.modal-overlay {
+.modal-overlay,
+.modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: 1050;
   display: grid;
   place-items: center;
   padding: 1.5rem;
   background: rgba(3, 7, 12, 0.85);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
 
 .modal-content {
