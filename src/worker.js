@@ -729,9 +729,116 @@ async function ensureSchema(db) {
       )
     `).run();
 
+    // 10. GIAI ĐOẠN 1: Bảng Quản lý Nhóm Sự Cố (Issues - APM Model)
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS issues (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        fingerprint TEXT UNIQUE NOT NULL,
+        job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+        app_identifier TEXT NOT NULL,
+        type TEXT NOT NULL CHECK(type IN ('crash', 'api_error')),
+        title TEXT NOT NULL,
+        culprit TEXT,
+        status TEXT DEFAULT 'unresolved' CHECK(status IN ('unresolved', 'resolved', 'ignored')),
+        severity TEXT DEFAULT 'error' CHECK(severity IN ('fatal', 'error', 'warning', 'info')),
+        first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        total_occurrences INTEGER DEFAULT 1,
+        user_count INTEGER DEFAULT 1,
+        sample_payload TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `).run();
+
+    for (const idx of [
+      'CREATE INDEX IF NOT EXISTS idx_issues_fingerprint ON issues(fingerprint)',
+      'CREATE INDEX IF NOT EXISTS idx_issues_app_status ON issues(app_identifier, status)',
+      'CREATE INDEX IF NOT EXISTS idx_issues_job_status ON issues(job_id, status)',
+      'CREATE INDEX IF NOT EXISTS idx_issues_last_seen ON issues(last_seen DESC)',
+      'CREATE INDEX IF NOT EXISTS idx_issues_occurrences ON issues(total_occurrences DESC)',
+    ]) {
+      try { await db.prepare(idx).run(); } catch (_) {}
+    }
+
+    // Bổ sung cột issue_id và fingerprint cho app_crashes và api_logs (idempotent)
+    for (const col of [
+      'ALTER TABLE app_crashes ADD COLUMN issue_id INTEGER',
+      'ALTER TABLE app_crashes ADD COLUMN fingerprint TEXT',
+      'ALTER TABLE api_logs ADD COLUMN issue_id INTEGER',
+      'ALTER TABLE api_logs ADD COLUMN fingerprint TEXT',
+    ]) {
+      try { await db.prepare(col).run(); } catch (_) {}
+    }
+
     tablesInitialized = true;
   } catch (err) {
     console.error('ensureSchema error:', err);
+  }
+}
+
+// ============================================================
+// GIAI ĐOẠN 1: THUẬT TOÁN ISSUE FINGERPRINTING & UPSERT LOGIC
+// ============================================================
+async function generateIssueFingerprint(type, appIdentifier, errorTitle, culprit) {
+  const normApp = (appIdentifier || 'unknown').trim().toLowerCase();
+  const normTitle = normalizeErrorFingerprint(errorTitle || 'unknown');
+  const normCulprit = normalizeErrorFingerprint(culprit || '');
+  const raw = `${type}:${normApp}:${normTitle}:${normCulprit}`;
+
+  const msgBuffer = new TextEncoder().encode(raw);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+}
+
+async function upsertIssueRecord(db, {
+  fingerprint,
+  jobId = null,
+  appIdentifier,
+  type,
+  title,
+  culprit = null,
+  severity = 'error',
+  samplePayload = null,
+  userCountIncrement = 0,
+}) {
+  if (!db || !fingerprint) return null;
+  try {
+    const serializedPayload = formatPayload(samplePayload);
+    const shortTitle = String(title || 'Sự cố không xác định').slice(0, 250);
+    const shortCulprit = culprit ? String(culprit).slice(0, 250) : null;
+
+    const row = await db.prepare(`
+      INSERT INTO issues (
+        fingerprint, job_id, app_identifier, type, title, culprit,
+        severity, status, first_seen, last_seen, total_occurrences,
+        user_count, sample_payload
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'unresolved', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1, 1, ?)
+      ON CONFLICT(fingerprint) DO UPDATE SET
+        total_occurrences = total_occurrences + 1,
+        last_seen = CURRENT_TIMESTAMP,
+        status = CASE WHEN status = 'resolved' THEN 'unresolved' ELSE status END,
+        job_id = COALESCE(excluded.job_id, issues.job_id),
+        severity = excluded.severity,
+        sample_payload = COALESCE(excluded.sample_payload, issues.sample_payload),
+        user_count = issues.user_count + ?
+      RETURNING id, fingerprint, status, total_occurrences
+    `).bind(
+      fingerprint,
+      jobId || null,
+      appIdentifier || 'unknown',
+      type,
+      shortTitle,
+      shortCulprit,
+      severity,
+      serializedPayload,
+      userCountIncrement
+    ).first();
+
+    return row || null;
+  } catch (err) {
+    console.error('upsertIssueRecord error:', err);
+    return null;
   }
 }
 
@@ -1746,7 +1853,61 @@ export default {
           } catch (_) {}
         }
 
+        let logIssueId = null;
+        let logFingerprint = null;
+
+        if (status_code && Number(status_code) >= 500) {
+          const title = `${(method || 'GET').toUpperCase()} ${endpoint} (${status_code})`;
+          const culprit = error_message ? String(error_message).slice(0, 200) : endpoint;
+          logFingerprint = await generateIssueFingerprint('api_error', effectiveAppIdentifier, title, culprit);
+          const issue = await upsertIssueRecord(env.DB, {
+            fingerprint: logFingerprint,
+            jobId: effectiveJobId,
+            appIdentifier: effectiveAppIdentifier,
+            type: 'api_error',
+            title,
+            culprit,
+            severity: 'error',
+            samplePayload: { endpoint, method, status_code, error_message, request_payload, response_payload },
+          });
+          logIssueId = issue?.id || null;
+
+          triggerTelegramAlert(env.DB, 'api_500', {
+            app_identifier: effectiveAppIdentifier,
+            endpoint,
+            method,
+            status_code,
+            error_message,
+            job_id: effectiveJobId,
+            issue_id: logIssueId,
+          }).catch(() => {});
+        }
+
         try {
+          await env.DB.prepare(`
+            INSERT INTO api_logs (
+              job_id, app_identifier, endpoint, method, status_code, 
+              error_message, request_payload, response_payload, duration_ms,
+              device_name, user_name, ip_address, issue_id, fingerprint
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).bind(
+            effectiveJobId,
+            effectiveAppIdentifier || null,
+            endpoint || '',
+            method || 'GET',
+            status_code || null,
+            error_message || null,
+            formatPayload(request_payload),
+            formatPayload(response_payload),
+            duration_ms || 0,
+            effectiveDeviceName || null,
+            clientUserName || null,
+            clientIp || null,
+            logIssueId,
+            logFingerprint
+          ).run();
+        } catch (insertErr) {
+          // Fallback nếu cột mới chưa cập nhật
           await env.DB.prepare(`
             INSERT INTO api_logs (
               job_id, app_identifier, endpoint, method, status_code, 
@@ -1767,39 +1928,9 @@ export default {
             clientUserName || null,
             clientIp || null
           ).run();
-        } catch (insertErr) {
-          // Fallback nếu cột mới gặp sự cố
-          await env.DB.prepare(`
-            INSERT INTO api_logs (
-              job_id, app_identifier, endpoint, method, status_code, 
-              error_message, request_payload, response_payload, duration_ms, device_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `).bind(
-            effectiveJobId,
-            effectiveAppIdentifier || null,
-            endpoint || '',
-            method || 'GET',
-            status_code || null,
-            error_message || null,
-            formatPayload(request_payload),
-            formatPayload(response_payload),
-            duration_ms || 0,
-            effectiveDeviceName || null
-          ).run();
         }
 
-        if (status_code && Number(status_code) >= 500) {
-          triggerTelegramAlert(env.DB, 'api_500', {
-            app_identifier: effectiveAppIdentifier,
-            endpoint,
-            method,
-            status_code,
-            error_message,
-            job_id: effectiveJobId,
-          }).catch(() => {});
-        }
-
-        return jsonResponse({ success: true, job_id: effectiveJobId });
+        return jsonResponse({ success: true, job_id: effectiveJobId, issue_id: logIssueId });
       } catch (e) {
         return jsonResponse({ error: e.message }, 500);
       }
@@ -1894,20 +2025,60 @@ export default {
           } catch (_) {}
         }
 
-        const res = await env.DB.prepare(`
-          INSERT INTO app_crashes (
-            job_id, app_identifier, error_message, stack_trace,
-            is_fatal, device_info, custom_attributes
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).bind(
-          effectiveJobId,
-          effectiveAppIdentifier || null,
-          String(error_message),
-          stack_trace ? String(stack_trace) : null,
-          is_fatal ? 1 : 0,
-          formatPayload(device_info),
-          formatPayload(custom_attributes)
-        ).run();
+        const crashTitle = String(error_message || 'App Crash').split('\n')[0].slice(0, 200);
+        let crashCulprit = null;
+        if (stack_trace) {
+          const lines = String(stack_trace).split('\n').map((l) => l.trim()).filter(Boolean);
+          crashCulprit = lines.find((l) => l.includes('.dart') || l.includes('.js') || l.includes('.ts') || l.includes(':')) || lines[0] || null;
+        }
+
+        const crashFingerprint = await generateIssueFingerprint('crash', effectiveAppIdentifier, crashTitle, crashCulprit);
+        const crashIssue = await upsertIssueRecord(env.DB, {
+          fingerprint: crashFingerprint,
+          jobId: effectiveJobId,
+          appIdentifier: effectiveAppIdentifier,
+          type: 'crash',
+          title: crashTitle,
+          culprit: crashCulprit,
+          severity: is_fatal ? 'fatal' : 'error',
+          samplePayload: { error_message, stack_trace, device_info, custom_attributes },
+        });
+        const issueId = crashIssue?.id || null;
+
+        let res;
+        try {
+          res = await env.DB.prepare(`
+            INSERT INTO app_crashes (
+              job_id, app_identifier, error_message, stack_trace,
+              is_fatal, device_info, custom_attributes, issue_id, fingerprint
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).bind(
+            effectiveJobId,
+            effectiveAppIdentifier || null,
+            String(error_message),
+            stack_trace ? String(stack_trace) : null,
+            is_fatal ? 1 : 0,
+            formatPayload(device_info),
+            formatPayload(custom_attributes),
+            issueId,
+            crashFingerprint
+          ).run();
+        } catch (insertErr) {
+          res = await env.DB.prepare(`
+            INSERT INTO app_crashes (
+              job_id, app_identifier, error_message, stack_trace,
+              is_fatal, device_info, custom_attributes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          `).bind(
+            effectiveJobId,
+            effectiveAppIdentifier || null,
+            String(error_message),
+            stack_trace ? String(stack_trace) : null,
+            is_fatal ? 1 : 0,
+            formatPayload(device_info),
+            formatPayload(custom_attributes)
+          ).run();
+        }
 
         let crashDevice = body.device_name || '';
         if (!crashDevice && device_info) {
@@ -1927,10 +2098,11 @@ export default {
             device_name: crashDevice,
             user_name: crashUser,
             job_id: effectiveJobId,
+            issue_id: issueId,
           }).catch(() => {});
         }
 
-        return jsonResponse({ success: true, id: res.meta?.last_row_id, job_id: effectiveJobId });
+        return jsonResponse({ success: true, id: res.meta?.last_row_id, job_id: effectiveJobId, issue_id: issueId });
       } catch (e) {
         return jsonResponse({ error: e.message }, 500);
       }
@@ -2670,13 +2842,46 @@ export default {
           const lApp = (log.app_identifier || log.app_id || effectiveApp).trim();
           const lDevice = (log.device_name || device_name || '').trim();
           const lUser = (log.user_name || user_name || '').trim();
+
+          let lIssueId = null;
+          let lFingerprint = null;
+          if (log.status_code && Number(log.status_code) >= 500) {
+            const lTitle = `${(log.method || 'GET').toUpperCase()} ${log.endpoint} (${log.status_code})`;
+            const lCulprit = log.error_message ? String(log.error_message).slice(0, 200) : log.endpoint;
+            lFingerprint = await generateIssueFingerprint('api_error', lApp, lTitle, lCulprit);
+            const lIssue = await upsertIssueRecord(env.DB, {
+              fingerprint: lFingerprint,
+              jobId: effectiveJobId,
+              appIdentifier: lApp,
+              type: 'api_error',
+              title: lTitle,
+              culprit: lCulprit,
+              severity: 'error',
+              samplePayload: { endpoint: log.endpoint, method: log.method, status_code: log.status_code, error_message: log.error_message },
+            });
+            lIssueId = lIssue?.id || null;
+
+            if (!batchApi500AlertTriggered) {
+              batchApi500AlertTriggered = true;
+              triggerTelegramAlert(env.DB, 'api_500', {
+                app_identifier: lApp,
+                endpoint: log.endpoint,
+                method: log.method,
+                status_code: log.status_code,
+                error_message: log.error_message,
+                job_id: effectiveJobId,
+                issue_id: lIssueId,
+              }).catch(() => {});
+            }
+          }
+
           statements.push(
             env.DB.prepare(`
               INSERT INTO api_logs (
                 job_id, app_identifier, endpoint, method, status_code, 
                 error_message, request_payload, response_payload, duration_ms,
-                device_name, user_name, ip_address
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                device_name, user_name, ip_address, issue_id, fingerprint
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).bind(
               effectiveJobId,
               lApp || null,
@@ -2689,22 +2894,11 @@ export default {
               log.duration_ms || 0,
               lDevice || null,
               lUser || null,
-              clientIp || null
+              clientIp || null,
+              lIssueId,
+              lFingerprint
             )
           );
-
-          // Chỉ kích hoạt tối đa 1 lỗi API 500 trong cùng một batch để chống flood/quá tải subrequests
-          if (!batchApi500AlertTriggered && log.status_code && Number(log.status_code) >= 500) {
-            batchApi500AlertTriggered = true;
-            triggerTelegramAlert(env.DB, 'api_500', {
-              app_identifier: lApp,
-              endpoint: log.endpoint,
-              method: log.method,
-              status_code: log.status_code,
-              error_message: log.error_message,
-              job_id: effectiveJobId,
-            }).catch(() => {});
-          }
         }
 
         // 2. Crashes
@@ -2712,12 +2906,31 @@ export default {
         for (const crash of crashes) {
           const cApp = (crash.app_identifier || crash.app_id || effectiveApp).trim();
           const isFatal = crash.is_fatal ? 1 : 0;
+          const cTitle = String(crash.error_message || 'Unknown Crash').split('\n')[0].slice(0, 200);
+          let cCulprit = null;
+          if (crash.stack_trace) {
+            const lines = String(crash.stack_trace).split('\n').map((l) => l.trim()).filter(Boolean);
+            cCulprit = lines.find((l) => l.includes('.dart') || l.includes('.js') || l.includes('.ts') || l.includes(':')) || lines[0] || null;
+          }
+
+          const cFingerprint = await generateIssueFingerprint('crash', cApp, cTitle, cCulprit);
+          const cIssue = await upsertIssueRecord(env.DB, {
+            fingerprint: cFingerprint,
+            jobId: effectiveJobId,
+            appIdentifier: cApp,
+            type: 'crash',
+            title: cTitle,
+            culprit: cCulprit,
+            severity: isFatal ? 'fatal' : 'error',
+            samplePayload: { error_message: crash.error_message, stack_trace: crash.stack_trace, device_info: crash.device_info, custom_attributes: crash.custom_attributes },
+          });
+
           statements.push(
             env.DB.prepare(`
               INSERT INTO app_crashes (
                 job_id, app_identifier, error_message, stack_trace,
-                is_fatal, device_info, custom_attributes
-              ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                is_fatal, device_info, custom_attributes, issue_id, fingerprint
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).bind(
               effectiveJobId,
               cApp || null,
@@ -2725,11 +2938,12 @@ export default {
               crash.stack_trace ? String(crash.stack_trace) : null,
               isFatal,
               formatPayload(crash.device_info || device_name),
-              formatPayload(crash.custom_attributes)
+              formatPayload(crash.custom_attributes),
+              cIssue?.id || null,
+              cFingerprint
             )
           );
 
-          // Chỉ kích hoạt tối đa 1 lỗi Crash trong cùng một batch để chống flood/quá tải subrequests
           if (!batchCrashAlertTriggered && isFatal) {
             batchCrashAlertTriggered = true;
             triggerTelegramAlert(env.DB, 'fatal_crash', {
@@ -2740,6 +2954,7 @@ export default {
               device_name: crash.device_name || device_name,
               user_name: crash.user_name || user_name,
               job_id: effectiveJobId,
+              issue_id: cIssue?.id || null,
             }).catch(() => {});
           }
         }
@@ -2781,6 +2996,170 @@ export default {
             events: events.length,
           },
         });
+      } catch (e) {
+        return jsonResponse({ error: e.message }, 500);
+      }
+    }
+
+    // ==========================================
+    // 12. API ISSUES (APM MANAGEMENT): /issues
+    // ==========================================
+    if (path === '/issues' && request.method === 'GET') {
+      try {
+        const urlParams = url.searchParams;
+        const status = urlParams.get('status'); // 'unresolved', 'resolved', 'ignored', 'all'
+        const type = urlParams.get('type'); // 'crash', 'api_error'
+        const appIdentifier = (urlParams.get('app_identifier') || urlParams.get('app_id') || '').trim();
+        const jobId = urlParams.get('job_id');
+        const sortBy = urlParams.get('sort_by') || 'last_seen';
+        const order = (urlParams.get('order') || 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+        const limit = Math.min(Math.max(Number(urlParams.get('limit')) || 50, 1), 100);
+        const offset = Math.max(Number(urlParams.get('offset')) || 0, 0);
+
+        let whereClause = 'WHERE 1=1';
+        const params = [];
+
+        if (status && status !== 'all') {
+          whereClause += ' AND status = ?';
+          params.push(status);
+        } else if (!status) {
+          whereClause += " AND status = 'unresolved'";
+        }
+
+        if (type) {
+          whereClause += ' AND type = ?';
+          params.push(type);
+        }
+
+        if (appIdentifier) {
+          whereClause += ' AND app_identifier = ?';
+          params.push(appIdentifier);
+        } else if (jobId) {
+          whereClause += ' AND job_id = ?';
+          params.push(Number(jobId));
+        }
+
+        const allowedSorts = ['last_seen', 'total_occurrences', 'created_at', 'first_seen'];
+        const sortColumn = allowedSorts.includes(sortBy) ? sortBy : 'last_seen';
+
+        const listQuery = `
+          SELECT * FROM issues
+          ${whereClause}
+          ORDER BY ${sortColumn} ${order}
+          LIMIT ? OFFSET ?
+        `;
+        const { results: issuesList } = await env.DB.prepare(listQuery).bind(...params, limit, offset).all();
+
+        // Thống kê số lượng theo từng trạng thái để phục vụ Tabs trên UI
+        let countFilter = 'WHERE 1=1';
+        const countParams = [];
+        if (appIdentifier) {
+          countFilter += ' AND app_identifier = ?';
+          countParams.push(appIdentifier);
+        } else if (jobId) {
+          countFilter += ' AND job_id = ?';
+          countParams.push(Number(jobId));
+        }
+
+        const countsRes = await env.DB.prepare(`
+          SELECT 
+            COUNT(*) AS total,
+            SUM(CASE WHEN status = 'unresolved' THEN 1 ELSE 0 END) AS unresolved,
+            SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END) AS resolved,
+            SUM(CASE WHEN status = 'ignored' THEN 1 ELSE 0 END) AS ignored
+          FROM issues
+          ${countFilter}
+        `).bind(...countParams).first();
+
+        return jsonResponse({
+          issues: issuesList || [],
+          total: (issuesList || []).length,
+          pagination: { limit, offset },
+          counts: {
+            total: countsRes?.total || 0,
+            unresolved: countsRes?.unresolved || 0,
+            resolved: countsRes?.resolved || 0,
+            ignored: countsRes?.ignored || 0,
+          },
+        });
+      } catch (e) {
+        return readErrorResponse(e, { issues: [] }, env.DB);
+      }
+    }
+
+    // Chi tiết một Issue: /issues/:id
+    const issueDetailMatch = path.match(/^\/issues\/(\d+)$/);
+    if (issueDetailMatch && request.method === 'GET') {
+      try {
+        const issueId = Number(issueDetailMatch[1]);
+        const issue = await env.DB.prepare('SELECT * FROM issues WHERE id = ?').bind(issueId).first();
+        if (!issue) {
+          return jsonResponse({ error: 'Không tìm thấy Issue' }, 404);
+        }
+
+        let recentEvents = [];
+        if (issue.type === 'crash') {
+          const { results } = await env.DB.prepare(`
+            SELECT id, app_identifier, error_message, stack_trace, is_fatal, device_info, custom_attributes, created_at
+            FROM app_crashes
+            WHERE issue_id = ? OR fingerprint = ?
+            ORDER BY id DESC LIMIT 20
+          `).bind(issueId, issue.fingerprint).all();
+          recentEvents = results || [];
+        } else {
+          const { results } = await env.DB.prepare(`
+            SELECT id, app_identifier, endpoint, method, status_code, error_message, request_payload, response_payload, duration_ms, device_name, user_name, created_at
+            FROM api_logs
+            WHERE issue_id = ? OR fingerprint = ?
+            ORDER BY id DESC LIMIT 20
+          `).bind(issueId, issue.fingerprint).all();
+          recentEvents = results || [];
+        }
+
+        return jsonResponse({
+          issue,
+          recent_events: recentEvents,
+        });
+      } catch (e) {
+        return readErrorResponse(e, {}, env.DB);
+      }
+    }
+
+    // Cập nhật trạng thái Issue: PATCH /issues/:id
+    if (issueDetailMatch && request.method === 'PATCH') {
+      try {
+        const issueId = Number(issueDetailMatch[1]);
+        const body = await request.json().catch(() => ({}));
+        const newStatus = body.status;
+        if (!['unresolved', 'resolved', 'ignored'].includes(newStatus)) {
+          return jsonResponse({ error: 'Trạng thái không hợp lệ (chỉ chấp nhận unresolved, resolved, ignored)' }, 400);
+        }
+
+        await env.DB.prepare(`
+          UPDATE issues
+          SET status = ?, last_seen = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(newStatus, issueId).run();
+
+        const updated = await env.DB.prepare('SELECT * FROM issues WHERE id = ?').bind(issueId).first();
+        return jsonResponse({ success: true, issue: updated });
+      } catch (e) {
+        return jsonResponse({ error: e.message }, 500);
+      }
+    }
+
+    // Đánh dấu nhanh Resolved: POST /issues/:id/resolve
+    const issueResolveMatch = path.match(/^\/issues\/(\d+)\/resolve$/);
+    if (issueResolveMatch && request.method === 'POST') {
+      try {
+        const issueId = Number(issueResolveMatch[1]);
+        await env.DB.prepare(`
+          UPDATE issues
+          SET status = 'resolved'
+          WHERE id = ?
+        `).bind(issueId).run();
+
+        return jsonResponse({ success: true, message: 'Đã giải quyết Issue thành công' });
       } catch (e) {
         return jsonResponse({ error: e.message }, 500);
       }
