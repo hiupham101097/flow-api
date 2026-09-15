@@ -103,14 +103,19 @@ Chọn tên bước trong bảng này để số liệu giữa các app so sánh
 
 Nguồn duy nhất của bảng này: `IDENTITY_STEP_LABELS` trong `src/worker.js`.
 
-### Hai funnel có sẵn
+### Ba funnel chuẩn được tách biệt sẵn
 
-| Funnel | Tiền tố | Thứ tự bước |
-| --- | --- | --- |
-| `ekyc` — Định danh cá nhân | `ekyc_` | `capture_front` → `capture_back` → `id_ocr` → `mrz_read` → `nfc_read` → `face_match` → `kyc_submit` |
-| `ekyb` — Định danh doanh nghiệp | `ekyb_` | `capture_front` → `capture_back` → `capture_license` → `id_ocr` → `nfc_read` → `face_match` → `kyc_submit` → `business_ocr` → `form_review` → `kyb_submit` |
+| Funnel | Tên hiển thị | Tiền tố | Thứ tự bước chuẩn |
+| --- | --- | --- | --- |
+| `ekyc` | **Định danh ảnh chụp (eKYC)** | `ekyc_` | `capture_front` → `capture_back` → `id_ocr` → `face_match` → `kyc_submit` |
+| `eid` | **Định danh CCCD gắn chip (eID / NFC)** | `eid_` | `capture_front` → `mrz_read` → `nfc_read` → `face_match` → `kyc_submit` |
+| `ekyb` | **Định danh doanh nghiệp (eKYB)** | `ekyb_` | `capture_front` → `capture_back` → `capture_license` → `id_ocr` → `nfc_read` → `face_match` → `kyc_submit` → `business_ocr` → `form_review` → `kyb_submit` |
 
-**eKYC thường và eID dùng chung funnel `ekyc`**, phân biệt bằng tham số `mode` (`ekyc` | `eid`) chứ không tách funnel — để tỷ lệ hoàn thành của hai hình thức so sánh được trực tiếp. Bước nào app không chạy thì đếm 0, không ảnh hưởng app khác.
+> 💡 **Phân biệt rõ ràng:**
+> - **`ekyc` (eKYC)**: Dành cho xác thực chụp ảnh thông thường (mặt trước + mặt sau + OCR + chụp khuôn mặt). Hoàn toàn **không có bước quét NFC/đọc chip**.
+> - **`eid` (eID / eKYD)**: Dành cho xác thực qua căn cước công dân gắn chip (quét mã MRZ + áp thẻ đọc chip NFC + đối chiếu ảnh trong chip).
+> - Hệ thống tự động phân tách thống kê độc lập để tỷ lệ hoàn thành (completion rate) của từng luồng phản ánh đúng thực tế, không bị rơi rụng giả tạo.
+> - *Khả năng tương thích ngược*: Các bản build cũ vẫn bắn sự kiện `ekyc_` với tham số `mode: 'eid'` sẽ được hệ thống tự động bóc tách vào đúng funnel `eid`!
 
 ---
 

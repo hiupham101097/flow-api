@@ -45,8 +45,10 @@
 
 /** Tên các funnel định danh đã được seed sẵn trên server. */
 export const KYC_FUNNELS = {
-  /** Định danh cá nhân - dùng chung cho cả eKYC thường lẫn eID đọc chip NFC. */
+  /** Định danh cá nhân qua ảnh chụp giấy tờ (OCR + Face Matching). */
   ekyc: 'ekyc',
+  /** Định danh cá nhân qua căn cước công dân gắn chip NFC (MRZ + NFC Chip). */
+  eid: 'eid',
   /** Định danh doanh nghiệp. */
   ekyb: 'ekyb',
 };

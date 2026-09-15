@@ -64,9 +64,11 @@ import 'package:http/http.dart' as http;
 
 /// Tên các funnel định danh đã được seed sẵn trên server.
 abstract final class KycFunnelKeys {
-  /// Định danh cá nhân - dùng chung cho cả eKYC thường lẫn eID đọc chip NFC.
-  /// Phân biệt hai hình thức bằng tham số `mode` của sự kiện, đừng tách funnel.
+  /// Định danh cá nhân qua ảnh chụp giấy tờ (OCR + Face Matching)
   static const String ekyc = 'ekyc';
+
+  /// Định danh cá nhân qua căn cước công dân gắn chip NFC (MRZ + NFC Chip)
+  static const String eid = 'eid';
 
   /// Định danh doanh nghiệp.
   static const String ekyb = 'ekyb';

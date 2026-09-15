@@ -204,19 +204,25 @@ const makeIdentityFunnel = ({ key, name, steps, appIdentifier = null }) => ({
   },
 });
 
-// Định danh cá nhân. Một funnel cho cả eKYC thường lẫn eID đọc chip: app phân
-// biệt bằng tham số `mode` của sự kiện chứ không tách funnel, để tỷ lệ hoàn
-// thành của hai hình thức so sánh được trực tiếp với nhau.
-//
-// mrz_read và nfc_read chỉ chạy ở chế độ eID nên sẽ có số lượt thấp hơn hẳn -
-// đó là đúng, không phải rơi rụng.
+// 1. Định danh cá nhân qua ảnh chụp giấy tờ (OCR + Face Matching)
 const EKYC_FUNNEL = makeIdentityFunnel({
   key: 'ekyc',
-  name: 'Định danh cá nhân (eKYC/eID)',
+  name: 'Định danh ảnh chụp (eKYC)',
   steps: [
     'capture_front',
     'capture_back',
     'id_ocr',
+    'face_match',
+    'kyc_submit',
+  ],
+});
+
+// 2. Định danh cá nhân qua căn cước công dân gắn chip NFC (eID / eKYD)
+const EID_FUNNEL = makeIdentityFunnel({
+  key: 'eid',
+  name: 'Định danh CCCD gắn chip (eID / NFC)',
+  steps: [
+    'capture_front',
     'mrz_read',
     'nfc_read',
     'face_match',
@@ -224,10 +230,7 @@ const EKYC_FUNNEL = makeIdentityFunnel({
   ],
 });
 
-// Định danh doanh nghiệp. App nào gộp cả phần định danh cá nhân vào luồng eKYB
-// (như FizaHub) thì các bước nfc_read/face_match/kyc_submit ở giữa sẽ có số;
-// app tách riêng hai luồng (như VNetrip) thì các bước đó đếm 0 ở funnel này và
-// được tính bên funnel eKYC.
+// 3. Định danh doanh nghiệp (eKYB)
 const EKYB_FUNNEL = makeIdentityFunnel({
   key: 'ekyb',
   name: 'Định danh doanh nghiệp (eKYB)',
@@ -245,12 +248,11 @@ const EKYB_FUNNEL = makeIdentityFunnel({
   ],
 });
 
-// Funnel được seed sẵn khi khởi tạo schema, để mở tab Thống kê là thấy số ngay.
-const SEEDED_FUNNELS = [EKYC_FUNNEL, EKYB_FUNNEL];
+// Ba funnel chuẩn được seed sẵn khi khởi tạo schema
+const SEEDED_FUNNELS = [EKYC_FUNNEL, EID_FUNNEL, EKYB_FUNNEL];
 
-// Chỉ là giá trị mặc định cho ai gọi thẳng /events/stats mà quên tham số
-// `funnel`; dashboard luôn gửi funnel đang chọn nên không phụ thuộc vào đây.
-const DEFAULT_STATS_FUNNEL_KEY = EKYB_FUNNEL.funnel_key;
+// Giá trị mặc định cho ai gọi thẳng /events/stats mà quên tham số `funnel`
+const DEFAULT_STATS_FUNNEL_KEY = EKYC_FUNNEL.funnel_key;
 
 const safeJsonParse = (value, fallback = null) => {
   if (value === null || value === undefined) return fallback;
@@ -366,7 +368,11 @@ async function computeFunnelStats(db, funnel, options = {}) {
 
   let eventClause = '';
   const eventParams = [];
-  if (funnel.event_prefix) {
+  if (funnel.funnel_key === 'eid') {
+    eventClause = " AND (e.event_name LIKE 'eid_%' OR (e.event_name LIKE 'ekyc_%' AND json_extract(e.parameters, '$.mode') = 'eid'))";
+  } else if (funnel.funnel_key === 'ekyc') {
+    eventClause = " AND (e.event_name LIKE 'ekyc_%' AND (json_extract(e.parameters, '$.mode') IS NULL OR json_extract(e.parameters, '$.mode') <> 'eid'))";
+  } else if (funnel.event_prefix) {
     eventClause = ' AND e.event_name LIKE ?';
     eventParams.push(`${funnel.event_prefix}%`);
   } else if (funnelEvents.length) {
@@ -401,6 +407,11 @@ async function computeFunnelStats(db, funnel, options = {}) {
 
   const utcRange = vnDayRangeToUtc(dayFrom, dayTo);
 
+  const isEidFunnel = funnel.funnel_key === 'eid';
+  const eventNameExpr = isEidFunnel
+    ? "CASE WHEN e.event_name LIKE 'ekyc_%' THEN REPLACE(e.event_name, 'ekyc_', 'eid_') ELSE e.event_name END"
+    : "e.event_name";
+
   const baseCte = `
     WITH ev AS (
       SELECT
@@ -408,7 +419,7 @@ async function computeFunnelStats(db, funnel, options = {}) {
         json_extract(e.parameters, '$.' || ?) AS step,
         json_extract(e.parameters, '$.' || ?) AS outcome,
         CAST(json_extract(e.parameters, '$.' || ?) AS INTEGER) AS duration_ms,
-        e.event_name AS event_name,
+        ${eventNameExpr} AS event_name,
         e.parameters AS parameters,
         e.created_at AS created_at,
         ${bucketExpr} AS bucket
@@ -800,12 +811,14 @@ async function ensureSchema(db) {
     ).run();
 
     // Seed funnel sẵn có để mở tab Thống kê là thấy số ngay, khỏi cấu hình tay.
-    // INSERT OR IGNORE: funnel nào đã tồn tại thì giữ nguyên cấu hình người
-    // dùng có thể đã sửa trên dashboard.
+    // Tự động cập nhật tên và cấu hình chuẩn khi hệ thống nâng cấp.
     for (const funnel of SEEDED_FUNNELS) {
       await db.prepare(`
-        INSERT OR IGNORE INTO event_funnels (funnel_key, name, app_identifier, event_prefix, config)
+        INSERT INTO event_funnels (funnel_key, name, app_identifier, event_prefix, config)
         VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(funnel_key) DO UPDATE SET
+          name = excluded.name,
+          config = excluded.config
       `).bind(
         funnel.funnel_key,
         funnel.name,
