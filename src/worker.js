@@ -720,9 +720,141 @@ async function ensureSchema(db) {
       JSON.stringify(EKYB_FUNNEL.config)
     ).run();
 
+    // 9. Cấu hình hệ thống (Telegram Bot, cảnh báo, tùy chọn)
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS system_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `).run();
+
     tablesInitialized = true;
   } catch (err) {
     console.error('ensureSchema error:', err);
+  }
+}
+
+// ==========================================
+// CẤU HÌNH & CẢNH BÁO TELEGRAM (ALERTS)
+// ==========================================
+let settingsCache = { at: 0, data: null };
+const SETTINGS_TTL_MS = 30000; // 30s
+
+async function getSystemSettings(db) {
+  if (settingsCache.data && Date.now() - settingsCache.at < SETTINGS_TTL_MS) {
+    return settingsCache.data;
+  }
+  try {
+    const { results } = await db.prepare('SELECT key, value FROM system_settings').all();
+    const map = {};
+    (results || []).forEach((row) => {
+      map[row.key] = row.value;
+    });
+    settingsCache = { at: Date.now(), data: map };
+    return map;
+  } catch (_) {
+    return {};
+  }
+}
+
+function invalidateSettingsCache() {
+  settingsCache = { at: 0, data: null };
+}
+
+const telegramAlertThrottle = new Map();
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+async function sendTelegramMessage(token, chatId, text) {
+  if (!token || !chatId || !text) return false;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+      }),
+    });
+    const json = await res.json();
+    return json.ok === true;
+  } catch (err) {
+    console.error('Telegram send error:', err);
+    return false;
+  }
+}
+
+async function triggerTelegramAlert(db, type, payload) {
+  try {
+    const settings = await getSystemSettings(db);
+    const token = settings.telegram_bot_token;
+    const chatId = settings.telegram_chat_id;
+    if (!token || !chatId) return;
+
+    const timeStr = new Date(Date.now() + VN_OFFSET_HOURS * 3600000)
+      .toISOString()
+      .slice(0, 19)
+      .replace('T', ' ');
+
+    if (type === 'fatal_crash') {
+      if (settings.telegram_alert_crashes === '0') return;
+      const key = `crash:${payload.app_identifier}:${String(payload.error_message || '').slice(0, 40)}`;
+      const lastSent = telegramAlertThrottle.get(key) || 0;
+      if (Date.now() - lastSent < 60000) return; // 1 phút chống spam cùng lỗi
+      telegramAlertThrottle.set(key, Date.now());
+
+      const app = payload.app_identifier || 'Unknown App';
+      const device = payload.device_name || 'Thiết bị di động';
+      const user = payload.user_name || 'Khách';
+      const errMsg = String(payload.error_message || 'Sự cố không xác định').slice(0, 250);
+      const stack = String(payload.stack_trace || '').slice(0, 300);
+
+      const msg = [
+        `🚨 <b>[Gden Flow] CẢNH BÁO SẬP APP (FATAL CRASH)</b>`,
+        `📱 <b>App:</b> <code>${escapeHtml(app)}</code>`,
+        `📟 <b>Thiết bị:</b> ${escapeHtml(device)}`,
+        `👤 <b>Người dùng:</b> ${escapeHtml(user)}`,
+        `💥 <b>Lỗi:</b> <code>${escapeHtml(errMsg)}</code>`,
+        stack ? `📜 <b>Stack Trace:</b>\n<pre>${escapeHtml(stack)}</pre>` : '',
+        `🕒 <b>Thời gian (VN):</b> ${timeStr}`,
+      ].filter(Boolean).join('\n');
+
+      await sendTelegramMessage(token, chatId, msg);
+    } else if (type === 'api_500') {
+      if (settings.telegram_alert_api500 !== '1') return;
+      const key = `api500:${payload.app_identifier}:${payload.endpoint}`;
+      const lastSent = telegramAlertThrottle.get(key) || 0;
+      if (Date.now() - lastSent < 120000) return; // 2 phút chống spam cùng endpoint
+      telegramAlertThrottle.set(key, Date.now());
+
+      const app = payload.app_identifier || 'Unknown App';
+      const endpoint = payload.endpoint || '';
+      const method = payload.method || 'GET';
+      const status = payload.status_code || 500;
+      const errMsg = String(payload.error_message || '').slice(0, 200);
+
+      const msg = [
+        `⚠️ <b>[Gden Flow] CẢNH BÁO LỖI MÁY CHỦ API (${status})</b>`,
+        `📱 <b>App:</b> <code>${escapeHtml(app)}</code>`,
+        `🔗 <b>Endpoint:</b> <code>${escapeHtml(method)} ${escapeHtml(endpoint)}</code>`,
+        errMsg ? `💥 <b>Chi tiết:</b> <code>${escapeHtml(errMsg)}</code>` : '',
+        `🕒 <b>Thời gian (VN):</b> ${timeStr}`,
+      ].filter(Boolean).join('\n');
+
+      await sendTelegramMessage(token, chatId, msg);
+    }
+  } catch (e) {
+    console.error('triggerTelegramAlert error:', e);
   }
 }
 
@@ -1039,8 +1171,11 @@ export default {
           path.startsWith('/users') ||
           path.startsWith('/jobs') ||
           path.startsWith('/crashes') ||
-          path.startsWith('/events'))) ||
-      path.startsWith('/funnels')
+          path.startsWith('/events') ||
+          path.startsWith('/settings') ||
+          path.startsWith('/telemetry/batch'))) ||
+      path.startsWith('/funnels') ||
+      path.startsWith('/settings')
     ) {
       await ensureSchema(env.DB);
     }
@@ -1495,6 +1630,16 @@ export default {
           ).run();
         }
 
+        if (status_code && Number(status_code) >= 500) {
+          triggerTelegramAlert(env.DB, 'api_500', {
+            app_identifier: effectiveAppIdentifier,
+            endpoint,
+            method,
+            status_code,
+            error_message,
+          }).catch(() => {});
+        }
+
         return jsonResponse({ success: true, job_id: effectiveJobId });
       } catch (e) {
         return jsonResponse({ error: e.message }, 500);
@@ -1604,6 +1749,26 @@ export default {
           formatPayload(device_info),
           formatPayload(custom_attributes)
         ).run();
+
+        let crashDevice = body.device_name || '';
+        if (!crashDevice && device_info) {
+          if (typeof device_info === 'object') crashDevice = device_info.device_name || device_info.model || '';
+          else if (typeof device_info === 'string') {
+            try { crashDevice = JSON.parse(device_info).device_name || ''; } catch (_) { crashDevice = device_info.slice(0, 30); }
+          }
+        }
+        const crashUser = body.user_name || body.user || '';
+
+        if (is_fatal) {
+          triggerTelegramAlert(env.DB, 'fatal_crash', {
+            app_identifier: effectiveAppIdentifier,
+            error_message,
+            stack_trace,
+            is_fatal: 1,
+            device_name: crashDevice,
+            user_name: crashUser,
+          }).catch(() => {});
+        }
 
         return jsonResponse({ success: true, id: res.meta?.last_row_id, job_id: effectiveJobId });
       } catch (e) {
@@ -2005,6 +2170,451 @@ export default {
         return jsonResponse(stats, 200, 'public, max-age=30');
       } catch (e) {
         return readErrorResponse(e, {}, env.DB);
+      }
+    }
+
+    // ==========================================
+    // 8. API SYSTEM HEALTH: /telemetry/health
+    // ==========================================
+    if (path === '/telemetry/health' && request.method === 'GET') {
+      try {
+        const appIdentifier = url.searchParams.get('app_identifier') || url.searchParams.get('app_id') || null;
+        let appFilterLogs = '';
+        let appFilterCrashes = '';
+        let appFilterEvents = '';
+        const params = [];
+        if (appIdentifier) {
+          appFilterLogs = ' AND app_identifier = ?';
+          appFilterCrashes = ' AND app_identifier = ?';
+          appFilterEvents = ' AND app_identifier = ?';
+          params.push(appIdentifier);
+        }
+
+        const [logStats, crashStats, eventStats] = await Promise.all([
+          env.DB.prepare(`
+            SELECT 
+              COUNT(*) AS total,
+              SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN 1 ELSE 0 END) AS success_count,
+              SUM(CASE WHEN status_code >= 500 OR status_code < 200 THEN 1 ELSE 0 END) AS server_errors,
+              ROUND(AVG(CASE WHEN duration_ms > 0 THEN duration_ms ELSE NULL END), 0) AS avg_duration
+            FROM api_logs
+            WHERE created_at >= datetime('now', '-24 hours')${appFilterLogs}
+          `).bind(...params).first(),
+          env.DB.prepare(`
+            SELECT 
+              COUNT(*) AS total,
+              SUM(CASE WHEN is_fatal = 1 THEN 1 ELSE 0 END) AS fatal_count
+            FROM app_crashes
+            WHERE created_at >= datetime('now', '-24 hours')${appFilterCrashes}
+          `).bind(...params).first(),
+          env.DB.prepare(`
+            SELECT COUNT(*) AS total
+            FROM app_events
+            WHERE created_at >= datetime('now', '-24 hours')${appFilterEvents}
+          `).bind(...params).first(),
+        ]);
+
+        const totalLogs = logStats?.total || 0;
+        const successCount = logStats?.success_count || 0;
+        const successRate = totalLogs > 0 ? Math.round((successCount / totalLogs) * 1000) / 10 : 100;
+
+        return jsonResponse({
+          window: '24 hours',
+          total_logs: totalLogs,
+          success_rate: successRate,
+          server_errors: logStats?.server_errors || 0,
+          avg_latency_ms: logStats?.avg_duration || 0,
+          total_crashes: crashStats?.total || 0,
+          fatal_crashes: crashStats?.fatal_count || 0,
+          total_events: eventStats?.total || 0,
+        }, 200, 'public, max-age=30');
+      } catch (e) {
+        return readErrorResponse(e, {}, env.DB);
+      }
+    }
+
+    // ==========================================
+    // 9. API USER JOURNEY TIMELINE: /telemetry/timeline
+    // ==========================================
+    if (path === '/telemetry/timeline' && request.method === 'GET') {
+      try {
+        const userParam = url.searchParams.get('user') || url.searchParams.get('user_name') || url.searchParams.get('user_id');
+        const deviceParam = url.searchParams.get('device') || url.searchParams.get('device_name');
+        const appIdentifier = url.searchParams.get('app_identifier') || url.searchParams.get('app_id');
+        const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 80, 10), 200);
+
+        if (!userParam && !deviceParam && !appIdentifier) {
+          return jsonResponse({ items: [], message: 'Cần chọn ít nhất Người dùng, Thiết bị hoặc App' });
+        }
+
+        let logWhere = 'WHERE 1=1';
+        const logParams = [];
+        let crashWhere = 'WHERE 1=1';
+        const crashParams = [];
+        let eventWhere = 'WHERE 1=1';
+        const eventParams = [];
+
+        if (appIdentifier) {
+          logWhere += ' AND app_identifier = ?';
+          logParams.push(appIdentifier);
+          crashWhere += ' AND app_identifier = ?';
+          crashParams.push(appIdentifier);
+          eventWhere += ' AND app_identifier = ?';
+          eventParams.push(appIdentifier);
+        }
+        if (userParam) {
+          logWhere += ' AND user_name = ?';
+          logParams.push(userParam);
+          crashWhere += ' AND (custom_attributes LIKE ? OR device_info LIKE ?)';
+          crashParams.push(`%${userParam}%`, `%${userParam}%`);
+          eventWhere += ' AND (user_name = ? OR user_id = ?)';
+          eventParams.push(userParam, userParam);
+        }
+        if (deviceParam) {
+          logWhere += ' AND device_name = ?';
+          logParams.push(deviceParam);
+          crashWhere += ' AND device_info LIKE ?';
+          crashParams.push(`%${deviceParam}%`);
+          eventWhere += ' AND (device_name = ? OR device_info LIKE ?)';
+          eventParams.push(deviceParam, `%${deviceParam}%`);
+        }
+
+        const [eventsRes, logsRes, crashesRes] = await Promise.all([
+          env.DB.prepare(`
+            SELECT id, app_identifier, event_name, event_type, screen_name, user_id, user_name, device_name, parameters, created_at
+            FROM app_events ${eventWhere}
+            ORDER BY id DESC LIMIT ?
+          `).bind(...eventParams, limit).all(),
+          env.DB.prepare(`
+            SELECT id, app_identifier, endpoint, method, status_code, error_message, duration_ms, user_name, device_name, substr(response_payload, 1, 300) as response_payload, created_at
+            FROM api_logs ${logWhere}
+            ORDER BY id DESC LIMIT ?
+          `).bind(...logParams, limit).all(),
+          env.DB.prepare(`
+            SELECT id, app_identifier, error_message, is_fatal, stack_trace, device_info, created_at
+            FROM app_crashes ${crashWhere}
+            ORDER BY id DESC LIMIT ?
+          `).bind(...crashParams, Math.floor(limit / 2)).all(),
+        ]);
+
+        const rawTimeline = [];
+
+        (eventsRes.results || []).forEach((e) => {
+          const isScreen = e.event_type === 'screen_view' || e.event_name === 'screen_view' || !!e.screen_name;
+          rawTimeline.push({
+            id: `event-${e.id}`,
+            raw_id: e.id,
+            category: isScreen ? 'screen' : 'event',
+            title: isScreen ? (e.screen_name || e.event_name) : e.event_name,
+            subtitle: isScreen ? 'Màn hình' : `Sự kiện (${e.event_type || 'custom'})`,
+            created_at: e.created_at,
+            user_name: e.user_name || e.user_id,
+            device_name: e.device_name,
+            app_identifier: e.app_identifier,
+            parameters: safeJsonParse(e.parameters, null),
+          });
+        });
+
+        (logsRes.results || []).forEach((l) => {
+          const isError = l.status_code >= 500 || l.status_code < 200;
+          const isWarn = l.status_code >= 400 && l.status_code < 500;
+          rawTimeline.push({
+            id: `log-${l.id}`,
+            raw_id: l.id,
+            category: isError ? 'api_error' : isWarn ? 'api_warning' : 'api_success',
+            title: `${l.method} ${l.endpoint}`,
+            subtitle: `HTTP ${l.status_code} • ${l.duration_ms || 0}ms`,
+            created_at: l.created_at,
+            user_name: l.user_name,
+            device_name: l.device_name,
+            app_identifier: l.app_identifier,
+            status_code: l.status_code,
+            duration_ms: l.duration_ms,
+            error_message: l.error_message,
+            response_payload: l.response_payload,
+          });
+        });
+
+        (crashesRes.results || []).forEach((c) => {
+          rawTimeline.push({
+            id: `crash-${c.id}`,
+            raw_id: c.id,
+            category: 'crash',
+            title: c.is_fatal ? 'Sập app nghiêm trọng (Fatal Crash)' : 'Ngoại lệ (Non-fatal Crash)',
+            subtitle: c.error_message,
+            created_at: c.created_at,
+            app_identifier: c.app_identifier,
+            is_fatal: Number(c.is_fatal) === 1,
+            error_message: c.error_message,
+            stack_trace: c.stack_trace,
+          });
+        });
+
+        rawTimeline.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        const items = rawTimeline.slice(-limit);
+
+        for (let i = 0; i < items.length; i++) {
+          if (i === 0) {
+            items[i].time_delta = 'Bắt đầu';
+          } else {
+            const diffMs = new Date(items[i].created_at).getTime() - new Date(items[i - 1].created_at).getTime();
+            if (diffMs < 1000) {
+              items[i].time_delta = `+${Math.max(diffMs, 0)}ms`;
+            } else if (diffMs < 60000) {
+              items[i].time_delta = `+${(diffMs / 1000).toFixed(1)}s`;
+            } else if (diffMs < 3600000) {
+              items[i].time_delta = `+${Math.round(diffMs / 60000)}m`;
+            } else {
+              items[i].time_delta = `+${Math.round(diffMs / 3600000)}h`;
+            }
+          }
+        }
+
+        return jsonResponse({
+          items,
+          total: items.length,
+          user: userParam || null,
+          device: deviceParam || null,
+        });
+      } catch (e) {
+        return readErrorResponse(e, { items: [] }, env.DB);
+      }
+    }
+
+    // ==========================================
+    // 10. API SETTINGS (TELEGRAM ALERTS): /settings/telegram
+    // ==========================================
+    if (path === '/settings/telegram' && request.method === 'GET') {
+      try {
+        const settings = await getSystemSettings(env.DB);
+        const token = settings.telegram_bot_token || '';
+        let maskedToken = '';
+        if (token.length > 8) {
+          maskedToken = `${token.slice(0, 4)}••••••••${token.slice(-4)}`;
+        }
+        return jsonResponse({
+          configured: !!(token && settings.telegram_chat_id),
+          has_bot_token: !!token,
+          bot_token_masked: maskedToken,
+          chat_id: settings.telegram_chat_id || '',
+          alert_crashes: settings.telegram_alert_crashes !== '0',
+          alert_api500: settings.telegram_alert_api500 === '1',
+          updated_at: settings.updated_at || null,
+        });
+      } catch (e) {
+        return jsonResponse({ error: e.message }, 500);
+      }
+    }
+
+    if (path === '/settings/telegram' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        const { bot_token, chat_id, alert_crashes, alert_api500 } = body;
+
+        const currentSettings = await getSystemSettings(env.DB);
+        const effectiveToken = (bot_token && !bot_token.includes('••')) ? bot_token.trim() : currentSettings.telegram_bot_token;
+        const effectiveChatId = chat_id !== undefined ? String(chat_id).trim() : currentSettings.telegram_chat_id;
+        const effectiveAlertCrashes = alert_crashes !== undefined ? (alert_crashes ? '1' : '0') : '1';
+        const effectiveAlertApi500 = alert_api500 !== undefined ? (alert_api500 ? '1' : '0') : '0';
+
+        const stmt = env.DB.prepare(`
+          INSERT INTO system_settings (key, value, updated_at)
+          VALUES (?, ?, CURRENT_TIMESTAMP)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+        `);
+
+        await env.DB.batch([
+          stmt.bind('telegram_bot_token', effectiveToken || ''),
+          stmt.bind('telegram_chat_id', effectiveChatId || ''),
+          stmt.bind('telegram_alert_crashes', effectiveAlertCrashes),
+          stmt.bind('telegram_alert_api500', effectiveAlertApi500),
+        ]);
+
+        invalidateSettingsCache();
+        return jsonResponse({ success: true, message: 'Đã lưu cấu hình Telegram thành công' });
+      } catch (e) {
+        return jsonResponse({ error: e.message }, 500);
+      }
+    }
+
+    if (path === '/settings/telegram/test' && request.method === 'POST') {
+      try {
+        const body = await request.json().catch(() => ({}));
+        const currentSettings = await getSystemSettings(env.DB);
+        const token = (body.bot_token && !body.bot_token.includes('••')) ? body.bot_token.trim() : currentSettings.telegram_bot_token;
+        const chatId = body.chat_id ? String(body.chat_id).trim() : currentSettings.telegram_chat_id;
+
+        if (!token || !chatId) {
+          return jsonResponse({ error: 'Cần có Telegram Bot Token và Chat ID để kiểm tra' }, 400);
+        }
+
+        const timeStr = new Date(Date.now() + VN_OFFSET_HOURS * 3600000)
+          .toISOString()
+          .slice(0, 19)
+          .replace('T', ' ');
+
+        const testMsg = [
+          `🔔 <b>[Gden Flow] KIỂM TRA KẾT NỐI TELEGRAM BOT</b>`,
+          `✅ <i>Kết nối thành công! Hệ thống đã sẵn sàng gửi cảnh báo sự cố sập ứng dụng và lỗi API thời gian thực.</i>`,
+          `🕒 <b>Thời gian:</b> ${timeStr}`,
+        ].join('\n');
+
+        const ok = await sendTelegramMessage(token, chatId, testMsg);
+        if (ok) {
+          return jsonResponse({ success: true, message: 'Đã gửi tin nhắn thử nghiệm thành công tới Telegram!' });
+        } else {
+          return jsonResponse({ error: 'Không thể gửi tin nhắn qua Telegram. Vui lòng kiểm tra lại Bot Token và Chat ID (đảm bảo bạn đã nhấn /start trong bot).' }, 400);
+        }
+      } catch (e) {
+        return jsonResponse({ error: e.message }, 500);
+      }
+    }
+
+    // ==========================================
+    // 11. API BATCH TELEMETRY INGESTION: /telemetry/batch
+    // ==========================================
+    if (path === '/telemetry/batch' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        const {
+          app_id,
+          app_identifier,
+          device_name,
+          user_name,
+          logs = [],
+          crashes = [],
+          events = [],
+        } = body;
+
+        const effectiveApp = (app_identifier || app_id || '').trim();
+        let effectiveJobId = null;
+        if (effectiveApp) {
+          try {
+            const matchedJob = await env.DB.prepare('SELECT id FROM jobs WHERE app_identifier = ?').bind(effectiveApp).first();
+            if (matchedJob) effectiveJobId = matchedJob.id;
+          } catch (_) {}
+        }
+
+        const clientIp = (
+          request.headers.get('cf-connecting-ip') ||
+          request.headers.get('x-forwarded-for')?.split(',')[0] ||
+          request.headers.get('x-real-ip') ||
+          ''
+        ).trim();
+
+        const statements = [];
+
+        // 1. Logs
+        for (const log of logs) {
+          const lApp = (log.app_identifier || log.app_id || effectiveApp).trim();
+          const lDevice = (log.device_name || device_name || '').trim();
+          const lUser = (log.user_name || user_name || '').trim();
+          statements.push(
+            env.DB.prepare(`
+              INSERT INTO api_logs (
+                job_id, app_identifier, endpoint, method, status_code, 
+                error_message, request_payload, response_payload, duration_ms,
+                device_name, user_name, ip_address
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).bind(
+              effectiveJobId,
+              lApp || null,
+              log.endpoint || '',
+              (log.method || 'GET').toUpperCase(),
+              log.status_code || null,
+              log.error_message || null,
+              formatPayload(log.request_payload),
+              formatPayload(log.response_payload),
+              log.duration_ms || 0,
+              lDevice || null,
+              lUser || null,
+              clientIp || null
+            )
+          );
+
+          if (log.status_code && Number(log.status_code) >= 500) {
+            triggerTelegramAlert(env.DB, 'api_500', {
+              app_identifier: lApp,
+              endpoint: log.endpoint,
+              method: log.method,
+              status_code: log.status_code,
+              error_message: log.error_message,
+            }).catch(() => {});
+          }
+        }
+
+        // 2. Crashes
+        for (const crash of crashes) {
+          const cApp = (crash.app_identifier || crash.app_id || effectiveApp).trim();
+          const isFatal = crash.is_fatal ? 1 : 0;
+          statements.push(
+            env.DB.prepare(`
+              INSERT INTO app_crashes (
+                job_id, app_identifier, error_message, stack_trace,
+                is_fatal, device_info, custom_attributes
+              ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            `).bind(
+              effectiveJobId,
+              cApp || null,
+              String(crash.error_message || 'Unknown Crash'),
+              crash.stack_trace ? String(crash.stack_trace) : null,
+              isFatal,
+              formatPayload(crash.device_info || device_name),
+              formatPayload(crash.custom_attributes)
+            )
+          );
+
+          if (isFatal) {
+            triggerTelegramAlert(env.DB, 'fatal_crash', {
+              app_identifier: cApp,
+              error_message: crash.error_message,
+              stack_trace: crash.stack_trace,
+              is_fatal: 1,
+              device_name: crash.device_name || device_name,
+              user_name: crash.user_name || user_name,
+            }).catch(() => {});
+          }
+        }
+
+        // 3. Events
+        for (const ev of events) {
+          const eApp = (ev.app_identifier || ev.app_id || effectiveApp).trim();
+          statements.push(
+            env.DB.prepare(`
+              INSERT INTO app_events (
+                job_id, app_identifier, event_name, event_type,
+                screen_name, user_id, parameters, device_info,
+                user_name, device_name
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).bind(
+              effectiveJobId,
+              eApp || null,
+              String(ev.event_name || 'event').trim(),
+              ev.event_type || 'event',
+              ev.screen_name || null,
+              ev.user_id ? String(ev.user_id) : null,
+              formatPayload(ev.parameters),
+              formatPayload(ev.device_info),
+              (ev.user_name || user_name || '').trim() || null,
+              (ev.device_name || device_name || '').trim() || null
+            )
+          );
+        }
+
+        if (statements.length > 0) {
+          await env.DB.batch(statements);
+        }
+
+        return jsonResponse({
+          success: true,
+          processed: {
+            logs: logs.length,
+            crashes: crashes.length,
+            events: events.length,
+          },
+        });
+      } catch (e) {
+        return jsonResponse({ error: e.message }, 500);
       }
     }
 

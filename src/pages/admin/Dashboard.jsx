@@ -1,6 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import '../../styles/global.css';
+import TelegramSettingsModal from '../../components/dashboard/TelegramSettingsModal';
+import UserJourneyTimeline from '../../components/dashboard/UserJourneyTimeline';
+import SystemHealthSummary from '../../components/dashboard/SystemHealthSummary';
+import { exportToCsv } from '../../utils/exportCsv';
 
 const API_MONITOR_URL = import.meta.env.VITE_WORKER_URL || 'https://flow-api.hieupham101097.workers.dev';
 
@@ -343,6 +347,20 @@ function Dashboard() {
   const [eventCatalog, setEventCatalog] = useState({ events: [], suggestions: [] });
   const [funnelDraft, setFunnelDraft] = useState({ funnel_key: '', name: '', event_prefix: '', app_identifier: '' });
   const [savingFunnel, setSavingFunnel] = useState(false);
+
+  // Telegram Alerting & User Journey Timeline states
+  const [telegramModalOpen, setTelegramModalOpen] = useState(false);
+  const [timelineUser, setTimelineUser] = useState('');
+  const [timelineDevice, setTimelineDevice] = useState('');
+  const [timelineApp, setTimelineApp] = useState('');
+
+  const viewUserTimeline = ({ user = '', device = '', app = '' }) => {
+    setTimelineUser(user);
+    setTimelineDevice(device);
+    setTimelineApp(app);
+    setTelemetryMode('timeline');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   const copyToClipboard = async (value, item) => {
     try {
@@ -1250,6 +1268,16 @@ const res = await monitoredFetch('https://api.example.com/data');`;
           <button
             type="button"
             className="secondary-btn"
+            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+            onClick={() => setTelegramModalOpen(true)}
+            title="Cài đặt thông báo sự cố qua Telegram Bot"
+          >
+            <span>🔔</span>
+            <span>Cảnh báo Telegram</span>
+          </button>
+          <button
+            type="button"
+            className="secondary-btn"
             onClick={() => setIntegrationOpen((prev) => !prev)}
           >
             🔌 Cấu hình SDK ({activeUserJob?.job_type === 'web' ? 'Web' : 'App'})
@@ -1290,7 +1318,10 @@ const res = await monitoredFetch('https://api.example.com/data');`;
         </div>
       )}
 
-      {/* Mode Switcher Dock: Logs | Crashlytics | Analytics */}
+      {/* 24-hour System Health Summary */}
+      <SystemHealthSummary selectedApp={selectedFilter !== 'all' ? selectedFilter : ''} />
+
+      {/* Mode Switcher Dock: Logs | Crashlytics | Analytics | Funnels | Timeline */}
       <div className="telemetry-mode-dock">
         <button
           type="button"
@@ -1331,6 +1362,18 @@ const res = await monitoredFetch('https://api.example.com/data');`;
         >
           <span>📊 Thống kê sự kiện</span>
           <span className="mode-badge">{funnels.length}</span>
+        </button>
+        <button
+          type="button"
+          className={`mode-pill-btn ${telemetryMode === 'timeline' ? 'active' : ''}`}
+          onClick={() => { setTelemetryMode('timeline'); setSearchTerm(''); }}
+        >
+          <span>🧭 Hành trình User</span>
+          {timelineUser && (
+            <span className="mode-badge" style={{ backgroundColor: 'var(--accent-strong)', color: '#fff' }}>
+              {timelineUser.slice(0, 10)}
+            </span>
+          )}
         </button>
       </div>
 
@@ -1793,6 +1836,16 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                   onChange={(event) => setSearchTerm(event.target.value)}
                 />
               </label>
+
+              <button
+                type="button"
+                className="secondary-btn"
+                style={{ padding: '0.45rem 0.8rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                onClick={() => exportToCsv('logs', filteredLogs)}
+                title="Xuất danh sách API Logs đang xem ra file CSV"
+              >
+                📥 Xuất CSV
+              </button>
             </div>
           </div>
 
@@ -1916,7 +1969,23 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                         </span>
                       </td>
                       <td className="duration-cell">{log.duration_ms || 0} ms</td>
-                      <td className="action-cell">
+                      <td className="action-cell" style={{ display: 'flex', gap: '0.35rem', justifyContent: 'flex-end' }}>
+                        <button
+                          type="button"
+                          className="view-btn"
+                          style={{ fontSize: '0.72rem', padding: '0.25rem 0.45rem', background: 'rgba(125, 156, 255, 0.12)', color: 'var(--accent)' }}
+                          title="Xem toàn bộ hành trình của User / Thiết bị này"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            viewUserTimeline({
+                              user: log.user_name || '',
+                              device: log.device_name || '',
+                              app: log.app_identifier || '',
+                            });
+                          }}
+                        >
+                          🐾
+                        </button>
                         <button
                           type="button"
                           className="view-btn"
@@ -2021,6 +2090,16 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                   onChange={(event) => setSearchTerm(event.target.value)}
                 />
               </label>
+
+              <button
+                type="button"
+                className="secondary-btn"
+                style={{ padding: '0.45rem 0.8rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                onClick={() => exportToCsv('crashes', filteredCrashes)}
+                title="Xuất danh sách Crashes đang xem ra file CSV"
+              >
+                📥 Xuất CSV
+              </button>
             </div>
           </div>
 
@@ -2103,7 +2182,23 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                           <span className="device-chip">📱 Mobile</span>
                         )}
                       </td>
-                      <td className="action-cell">
+                      <td className="action-cell" style={{ display: 'flex', gap: '0.35rem', justifyContent: 'flex-end' }}>
+                        <button
+                          type="button"
+                          className="view-btn"
+                          style={{ fontSize: '0.72rem', padding: '0.25rem 0.45rem', background: 'rgba(125, 156, 255, 0.12)', color: 'var(--accent)' }}
+                          title="Xem toàn bộ hành trình trước khi xảy ra sự cố này"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            viewUserTimeline({
+                              user: crash.user_name || '',
+                              device: (typeof deviceInfoParsed === 'object' ? deviceInfoParsed.model || deviceInfoParsed.device_name : '') || '',
+                              app: crash.app_identifier || '',
+                            });
+                          }}
+                        >
+                          🐾
+                        </button>
                         <button
                           type="button"
                           className="view-btn"
@@ -2208,6 +2303,16 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                   onChange={(event) => setSearchTerm(event.target.value)}
                 />
               </label>
+
+              <button
+                type="button"
+                className="secondary-btn"
+                style={{ padding: '0.45rem 0.8rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                onClick={() => exportToCsv('events', filteredEvents)}
+                title="Xuất danh sách Analytics Events đang xem ra file CSV"
+              >
+                📥 Xuất CSV
+              </button>
             </div>
           </div>
 
@@ -2306,7 +2411,23 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                           <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem' }}>Không có params</span>
                         )}
                       </td>
-                      <td className="action-cell">
+                      <td className="action-cell" style={{ display: 'flex', gap: '0.35rem', justifyContent: 'flex-end' }}>
+                        <button
+                          type="button"
+                          className="view-btn"
+                          style={{ fontSize: '0.72rem', padding: '0.25rem 0.45rem', background: 'rgba(125, 156, 255, 0.12)', color: 'var(--accent)' }}
+                          title="Xem toàn bộ hành trình của người dùng này"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            viewUserTimeline({
+                              user: event.user_name || event.user_id || '',
+                              device: event.device_name || '',
+                              app: event.app_identifier || '',
+                            });
+                          }}
+                        >
+                          🐾
+                        </button>
                         <button
                           type="button"
                           className="view-btn"
@@ -2608,6 +2729,20 @@ const res = await monitoredFetch('https://api.example.com/data');`;
               )}
             </div>
           )}
+        </section>
+      )}
+
+      {/* 5. User Journey Timeline Panel */}
+      {telemetryMode === 'timeline' && (
+        <section className="log-panel" style={{ background: 'none', border: 'none', padding: 0 }}>
+          <UserJourneyTimeline
+            initialUser={timelineUser}
+            initialDevice={timelineDevice}
+            initialApp={timelineApp || (selectedFilter !== 'all' ? selectedFilter : '')}
+            availableUsers={uniqueUsers}
+            availableDevices={uniqueDevices}
+            onOpenDetail={openDetail}
+          />
         </section>
       )}
 
@@ -3172,6 +3307,12 @@ const res = await monitoredFetch('https://api.example.com/data');`;
           </div>
         </div>
       )}
+
+      {/* MODAL: TELEGRAM ALERT SETTINGS */}
+      <TelegramSettingsModal
+        isOpen={telegramModalOpen}
+        onClose={() => setTelegramModalOpen(false)}
+      />
 
     </div>
   );

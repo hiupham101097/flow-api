@@ -132,6 +132,13 @@ CREATE TABLE IF NOT EXISTS event_funnel_daily (
 
 CREATE INDEX IF NOT EXISTS idx_funnel_daily_lookup ON event_funnel_daily(funnel_key, day);
 
+-- Bảng Cấu hình hệ thống (Telegram Bot, cảnh báo, tùy chọn)
+CREATE TABLE IF NOT EXISTS system_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- ĐẶT CUỐI FILE CÓ CHỦ ĐÍCH: SQLite không có ADD COLUMN IF NOT EXISTS, nên hai
 -- lệnh này sẽ báo "duplicate column name" nếu chạy file lần thứ hai. wrangler
 -- d1 execute dừng ngay ở lỗi đầu tiên, nên phải để chúng sau mọi CREATE để lần
