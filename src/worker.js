@@ -129,37 +129,128 @@ const DEFAULT_FUNNEL_CONFIG = {
   infer_failed_from_steps: true,
 };
 
-// Funnel eKYB của FizaHub, seed sẵn khi khởi tạo schema.
-const EKYB_FUNNEL = {
-  funnel_key: 'ekyb',
-  name: 'Định danh doanh nghiệp (eKYB)',
-  app_identifier: null,
-  event_prefix: 'ekyb_',
+// ============================================================================
+// FUNNEL ĐỊNH DANH DÙNG CHUNG CHO MỌI APP
+// ----------------------------------------------------------------------------
+// eKYC/eKYB không của riêng app nào: FizaHub, VNetrip và các app sau đều bắn
+// cùng một bộ sự kiện vào cùng một funnel, rồi lọc theo `app_identifier` trên
+// dashboard. Nhờ vậy thêm một app mới KHÔNG cần sửa file này - app chỉ cần
+// bắn đúng giao kèo sự kiện mô tả ở HUONG_DAN_EKYC_FUNNEL.md.
+//
+// Chỉ phải đụng vào đây khi xuất hiện một LOẠI luồng mới (ví dụ định danh
+// hộ chiếu), lúc đó thêm một dòng makeIdentityFunnel(...) là xong.
+// ============================================================================
+
+// Từ vựng bước chuẩn. App nên chọn tên bước trong danh sách này thay vì tự đặt,
+// để số liệu của các app so sánh được với nhau. Bước lạ vẫn hiện trên dashboard
+// (xếp sau các bước đã khai báo) nhưng sẽ mang nhãn là chính tên khoá.
+const IDENTITY_STEP_LABELS = {
+  // Chụp / thu thập ảnh
+  capture_front: 'Chụp mặt trước giấy tờ',
+  capture_back: 'Chụp mặt sau giấy tờ',
+  capture_license: 'Chụp giấy phép kinh doanh',
+  capture_portrait: 'Chụp chân dung',
+  // Bóc tách dữ liệu
+  id_ocr: 'OCR giấy tờ tuỳ thân',
+  business_ocr: 'OCR giấy phép kinh doanh',
+  mrz_read: 'Đọc MRZ/QR để mở chip',
+  nfc_read: 'Đọc chip NFC',
+  // Đối chiếu và gửi hồ sơ
+  face_match: 'Đối chiếu khuôn mặt',
+  form_review: 'Rà soát hồ sơ',
+  kyc_submit: 'Gửi hồ sơ eKYC',
+  kyb_submit: 'Gửi hồ sơ eKYB',
+};
+
+// Bốn giá trị outcome chuẩn mà app gửi lên. Giữ nguyên cho mọi funnel định danh
+// để cột thống kê của các app đọc giống nhau.
+const IDENTITY_OUTCOME_BUCKETS = {
+  auto: 'success_auto',
+  manual: 'success_manual',
+  failed: 'failed',
+  abandoned: 'abandoned',
+};
+
+/**
+ * Dựng một funnel định danh từ tiền tố sự kiện và danh sách bước.
+ *
+ * Tên sáu sự kiện được suy ra từ `key` theo đúng quy ước
+ * `<key>_attempt_started`, `<key>_step_started`, ... nên app và server không
+ * thể lệch nhau vì gõ nhầm.
+ *
+ * @param {string}   key   Tiền tố, ví dụ 'ekyc' -> sự kiện 'ekyc_attempt_started'.
+ * @param {string}   name  Tên hiển thị trên dashboard.
+ * @param {string[]} steps Các bước theo đúng thứ tự luồng chạy.
+ * @param {string?}  appIdentifier  Để null nghĩa là dùng chung cho mọi app.
+ */
+const makeIdentityFunnel = ({ key, name, steps, appIdentifier = null }) => ({
+  funnel_key: key,
+  name,
+  app_identifier: appIdentifier,
+  event_prefix: `${key}_`,
   config: {
     ...DEFAULT_FUNNEL_CONFIG,
-    start_event: 'ekyb_attempt_started',
-    complete_event: 'ekyb_attempt_completed',
-    step_started_event: 'ekyb_step_started',
-    step_succeeded_event: 'ekyb_step_succeeded',
-    step_failed_event: 'ekyb_step_failed',
-    fallback_manual_event: 'ekyb_fallback_manual',
-    steps_order: ['id_ocr', 'nfc_read', 'face_match', 'kyc_submit', 'business_ocr', 'kyb_submit'],
-    step_labels: {
-      id_ocr: 'OCR căn cước',
-      nfc_read: 'Đọc chip NFC',
-      face_match: 'Đối chiếu khuôn mặt',
-      kyc_submit: 'Gửi hồ sơ eKYC',
-      business_ocr: 'OCR giấy phép kinh doanh',
-      kyb_submit: 'Gửi hồ sơ eKYB',
-    },
-    outcome_buckets: {
-      auto: 'success_auto',
-      manual: 'success_manual',
-      failed: 'failed',
-      abandoned: 'abandoned',
-    },
+    start_event: `${key}_attempt_started`,
+    complete_event: `${key}_attempt_completed`,
+    step_started_event: `${key}_step_started`,
+    step_succeeded_event: `${key}_step_succeeded`,
+    step_failed_event: `${key}_step_failed`,
+    fallback_manual_event: `${key}_fallback_manual`,
+    steps_order: steps,
+    step_labels: Object.fromEntries(
+      steps.map((step) => [step, IDENTITY_STEP_LABELS[step] || step])
+    ),
+    outcome_buckets: { ...IDENTITY_OUTCOME_BUCKETS },
   },
-};
+});
+
+// Định danh cá nhân. Một funnel cho cả eKYC thường lẫn eID đọc chip: app phân
+// biệt bằng tham số `mode` của sự kiện chứ không tách funnel, để tỷ lệ hoàn
+// thành của hai hình thức so sánh được trực tiếp với nhau.
+//
+// mrz_read và nfc_read chỉ chạy ở chế độ eID nên sẽ có số lượt thấp hơn hẳn -
+// đó là đúng, không phải rơi rụng.
+const EKYC_FUNNEL = makeIdentityFunnel({
+  key: 'ekyc',
+  name: 'Định danh cá nhân (eKYC/eID)',
+  steps: [
+    'capture_front',
+    'capture_back',
+    'id_ocr',
+    'mrz_read',
+    'nfc_read',
+    'face_match',
+    'kyc_submit',
+  ],
+});
+
+// Định danh doanh nghiệp. App nào gộp cả phần định danh cá nhân vào luồng eKYB
+// (như FizaHub) thì các bước nfc_read/face_match/kyc_submit ở giữa sẽ có số;
+// app tách riêng hai luồng (như VNetrip) thì các bước đó đếm 0 ở funnel này và
+// được tính bên funnel eKYC.
+const EKYB_FUNNEL = makeIdentityFunnel({
+  key: 'ekyb',
+  name: 'Định danh doanh nghiệp (eKYB)',
+  steps: [
+    'capture_front',
+    'capture_back',
+    'capture_license',
+    'id_ocr',
+    'nfc_read',
+    'face_match',
+    'kyc_submit',
+    'business_ocr',
+    'form_review',
+    'kyb_submit',
+  ],
+});
+
+// Funnel được seed sẵn khi khởi tạo schema, để mở tab Thống kê là thấy số ngay.
+const SEEDED_FUNNELS = [EKYC_FUNNEL, EKYB_FUNNEL];
+
+// Chỉ là giá trị mặc định cho ai gọi thẳng /events/stats mà quên tham số
+// `funnel`; dashboard luôn gửi funnel đang chọn nên không phụ thuộc vào đây.
+const DEFAULT_STATS_FUNNEL_KEY = EKYB_FUNNEL.funnel_key;
 
 const safeJsonParse = (value, fallback = null) => {
   if (value === null || value === undefined) return fallback;
@@ -708,17 +799,21 @@ async function ensureSchema(db) {
       'CREATE INDEX IF NOT EXISTS idx_funnel_daily_lookup ON event_funnel_daily(funnel_key, day)'
     ).run();
 
-    // Seed funnel eKYB sẵn có để mở tab Thống kê là thấy số ngay, khỏi cấu hình tay
-    await db.prepare(`
-      INSERT OR IGNORE INTO event_funnels (funnel_key, name, app_identifier, event_prefix, config)
-      VALUES (?, ?, ?, ?, ?)
-    `).bind(
-      EKYB_FUNNEL.funnel_key,
-      EKYB_FUNNEL.name,
-      EKYB_FUNNEL.app_identifier,
-      EKYB_FUNNEL.event_prefix,
-      JSON.stringify(EKYB_FUNNEL.config)
-    ).run();
+    // Seed funnel sẵn có để mở tab Thống kê là thấy số ngay, khỏi cấu hình tay.
+    // INSERT OR IGNORE: funnel nào đã tồn tại thì giữ nguyên cấu hình người
+    // dùng có thể đã sửa trên dashboard.
+    for (const funnel of SEEDED_FUNNELS) {
+      await db.prepare(`
+        INSERT OR IGNORE INTO event_funnels (funnel_key, name, app_identifier, event_prefix, config)
+        VALUES (?, ?, ?, ?, ?)
+      `).bind(
+        funnel.funnel_key,
+        funnel.name,
+        funnel.app_identifier,
+        funnel.event_prefix,
+        JSON.stringify(funnel.config)
+      ).run();
+    }
 
     tablesInitialized = true;
   } catch (err) {
@@ -1935,7 +2030,7 @@ export default {
     // ==========================================
     if (path === '/events/stats' && request.method === 'GET') {
       try {
-        const funnelKey = url.searchParams.get('funnel') || EKYB_FUNNEL.funnel_key;
+        const funnelKey = url.searchParams.get('funnel') || DEFAULT_STATS_FUNNEL_KEY;
         const funnel = await loadFunnel(env.DB, funnelKey);
         if (!funnel) {
           return jsonResponse({ error: `Không tìm thấy funnel "${funnelKey}"` }, 404);
