@@ -4,6 +4,7 @@ import '../../styles/global.css';
 import TelegramSettingsModal from '../../components/dashboard/TelegramSettingsModal';
 import UserJourneyTimeline from '../../components/dashboard/UserJourneyTimeline';
 import SystemHealthSummary from '../../components/dashboard/SystemHealthSummary';
+import IssueManagementPanel from '../../components/dashboard/IssueManagementPanel';
 import { exportToCsv } from '../../utils/exportCsv';
 
 const API_MONITOR_URL = import.meta.env.VITE_WORKER_URL || 'https://flow-api.hieupham101097.workers.dev';
@@ -285,8 +286,11 @@ function Dashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
   const userIdFromUrl = searchParams.get('user_id');
 
-  // Multi-telemetry Mode: 'logs' | 'crashes' | 'analytics'
+  // Multi-telemetry Mode: 'issues' | 'logs' | 'crashes' | 'analytics' | 'funnels' | 'timeline'
   const [telemetryMode, setTelemetryMode] = useState('logs');
+
+  // Issue APM unresolved count
+  const [unresolvedIssuesCount, setUnresolvedIssuesCount] = useState(0);
 
   // Data states
   const [logs, setLogs] = useState([]);
@@ -538,6 +542,24 @@ function Dashboard() {
       await applyResult(logsRes, setLogs, held.logs);
       await applyResult(crashesRes, setCrashes, held.crashes);
       await applyResult(eventsRes, setEvents, held.events);
+
+      // Cập nhật số lượng sự cố chưa giải quyết cho Tab badge
+      try {
+        const issueUrl = `${API_MONITOR_URL}/issues?limit=1&status=unresolved${
+          activeUser && activeUser !== 'all'
+            ? (!isNaN(Number(activeUser)) ? `&job_id=${encodeURIComponent(activeUser)}` : `&app_identifier=${encodeURIComponent(activeUser)}`)
+            : ''
+        }`;
+        const issueRes = await fetch(issueUrl, fetchOptions);
+        if (issueRes.ok) {
+          const issueData = await issueRes.json();
+          if (issueData?.counts?.unresolved !== undefined) {
+            setUnresolvedIssuesCount(issueData.counts.unresolved);
+          }
+        }
+      } catch {
+        // silent
+      }
 
       setError(null);
     } catch (requestError) {
@@ -1321,8 +1343,24 @@ const res = await monitoredFetch('https://api.example.com/data');`;
       {/* 24-hour System Health Summary */}
       <SystemHealthSummary selectedApp={selectedFilter !== 'all' ? selectedFilter : ''} />
 
-      {/* Mode Switcher Dock: Logs | Crashlytics | Analytics | Funnels | Timeline */}
+      {/* Mode Switcher Dock: Issues | Logs | Crashlytics | Analytics | Funnels | Timeline */}
       <div className="telemetry-mode-dock">
+        <button
+          type="button"
+          className={`mode-pill-btn ${telemetryMode === 'issues' ? 'active' : ''}`}
+          onClick={() => { setTelemetryMode('issues'); setSearchTerm(''); }}
+        >
+          <span>🚨 Sự cố (Issues)</span>
+          <span
+            className="mode-badge"
+            style={{
+              backgroundColor: unresolvedIssuesCount > 0 && telemetryMode !== 'issues' ? 'rgba(255, 119, 133, 0.25)' : undefined,
+              color: unresolvedIssuesCount > 0 && telemetryMode !== 'issues' ? '#ff7785' : undefined,
+            }}
+          >
+            {unresolvedIssuesCount}
+          </span>
+        </button>
         <button
           type="button"
           className={`mode-pill-btn ${telemetryMode === 'logs' ? 'active' : ''}`}
@@ -2780,6 +2818,15 @@ const res = await monitoredFetch('https://api.example.com/data');`;
             onOpenDetail={openDetail}
           />
         </section>
+      )}
+
+      {/* 6. Issues APM Management Panel */}
+      {telemetryMode === 'issues' && (
+        <IssueManagementPanel
+          selectedApp={selectedFilter !== 'all' ? selectedFilter : ''}
+          activeUserJob={activeUserJob}
+          onViewUserTimeline={viewUserTimeline}
+        />
       )}
 
 
