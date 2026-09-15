@@ -762,7 +762,69 @@ function invalidateSettingsCache() {
   settingsCache = { at: 0, data: null };
 }
 
-const telegramAlertThrottle = new Map();
+// ==========================================
+// CƠ CHẾ CHỐNG QUÁ TẢI & CẢNH BÁO TELEGRAM (OPTIMIZED)
+// ==========================================
+const alertThrottleMap = new Map();
+let globalLastAlertSentTime = 0;
+const GLOBAL_MIN_INTERVAL_MS = 2500; // Cách nhau tối thiểu 2.5s giữa các thông báo
+
+// Giới hạn tốc độ toàn hệ thống (Rolling minute window)
+let alertMinuteWindowStart = Date.now();
+let alertsSentThisMinute = 0;
+const MAX_ALERTS_PER_MINUTE = 6; // Tối đa 6 tin/phút toàn hệ thống
+let isStormModeActive = false;
+let stormSuppressedCount = 0;
+let stormActivatedAt = 0;
+
+// Cache tên Dự án / Job để không tốn D1 read quota
+let jobDisplayNameCache = { at: 0, map: new Map() };
+const JOB_CACHE_TTL = 60000; // 1 phút
+
+async function getJobDisplayName(db, appId, jobId) {
+  if (!db) return null;
+  if (Date.now() - jobDisplayNameCache.at > JOB_CACHE_TTL) {
+    try {
+      const { results } = await db.prepare('SELECT id, name, app_identifier FROM jobs').all();
+      const map = new Map();
+      (results || []).forEach((j) => {
+        if (j.id) map.set(`id:${j.id}`, j.name);
+        if (j.app_identifier) map.set(`app:${j.app_identifier}`, j.name);
+      });
+      jobDisplayNameCache = { at: Date.now(), map };
+    } catch (_) {}
+  }
+  if (jobId && jobDisplayNameCache.map.has(`id:${jobId}`)) return jobDisplayNameCache.map.get(`id:${jobId}`);
+  if (appId && jobDisplayNameCache.map.has(`app:${appId}`)) return jobDisplayNameCache.map.get(`app:${appId}`);
+  return null;
+}
+
+// Tự động dọn dẹp bộ nhớ định kỳ chống rò rỉ (memory leak)
+let lastThrottleCleanup = Date.now();
+function cleanupAlertThrottleMap() {
+  const now = Date.now();
+  if (now - lastThrottleCleanup < 300000) return; // 5 phút
+  lastThrottleCleanup = now;
+  for (const [key, val] of alertThrottleMap.entries()) {
+    if (now - (val.lastSent || 0) > 900000) { // Quá 15 phút không xuất hiện
+      alertThrottleMap.delete(key);
+    }
+  }
+}
+
+// Chuẩn hóa dấu vết lỗi (Error Fingerprint) để gom nhóm chính xác
+function normalizeErrorFingerprint(str) {
+  if (!str) return 'unknown';
+  return String(str)
+    .toLowerCase()
+    .replace(/0x[0-9a-fA-F]+/g, 'hex')
+    .replace(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g, 'uuid')
+    .replace(/\b\d+\b/g, 'num')
+    .replace(/\?.*$/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+}
 
 function escapeHtml(str) {
   if (!str) return '';
@@ -786,7 +848,15 @@ async function sendTelegramMessage(token, chatId, text) {
         disable_web_page_preview: true,
       }),
     });
-    const json = await res.json();
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) {
+      console.warn('Telegram API response not OK:', json);
+      if (res.status === 429) {
+        // Telegram rate limit: cooldown theo yêu cầu của Telegram
+        const retryAfter = (json.parameters?.retry_after || 30) * 1000;
+        globalLastAlertSentTime = Date.now() + retryAfter;
+      }
+    }
     return json.ok === true;
   } catch (err) {
     console.error('Telegram send error:', err);
@@ -801,57 +871,145 @@ async function triggerTelegramAlert(db, type, payload) {
     const chatId = settings.telegram_chat_id;
     if (!token || !chatId) return;
 
-    const timeStr = new Date(Date.now() + VN_OFFSET_HOURS * 3600000)
+    if (type === 'fatal_crash' && settings.telegram_alert_crashes === '0') return;
+    if (type === 'api_500' && settings.telegram_alert_api500 !== '1') return;
+
+    const now = Date.now();
+    cleanupAlertThrottleMap();
+
+    // 1. Kiểm tra giới hạn tần suất toàn hệ thống (Window 1 phút)
+    if (now - alertMinuteWindowStart > 60000) {
+      alertMinuteWindowStart = now;
+      alertsSentThisMinute = 0;
+      // Thoát chế độ Storm nếu sau 3 phút tải đã hạ nhiệt
+      if (isStormModeActive && now - stormActivatedAt > 180000) {
+        if (stormSuppressedCount > 0) {
+          const stormSummaryMsg = [
+            `✅ <b>[Gden Flow] BÃO SỰ CỐ ĐÃ HẠ NHIỆT</b>`,
+            `Trong đợt quá tải vừa qua, hệ thống đã tự động nén <b>${stormSuppressedCount} cảnh báo dồn dập</b> để bảo vệ bot và chống ngập tin nhắn.`,
+            `Hệ thống hiện đã trở lại chế độ giám sát bình thường.`,
+          ].join('\n');
+          await sendTelegramMessage(token, chatId, stormSummaryMsg);
+        }
+        isStormModeActive = false;
+        stormSuppressedCount = 0;
+      }
+    }
+
+    // 2. Kích hoạt Bộ ngắt mạch chống Bão lỗi (Storm Mode Circuit Breaker)
+    if (alertsSentThisMinute >= MAX_ALERTS_PER_MINUTE) {
+      if (!isStormModeActive) {
+        isStormModeActive = true;
+        stormActivatedAt = now;
+        stormSuppressedCount = 1;
+        const stormAlertMsg = [
+          `🚨 <b>[Gden Flow] BẢO VỆ QUÁ TẢI: KÍCH HOẠT CHẾ ĐỘ NÉN BÃO LỖI</b>`,
+          `⚠️ Phát hiện tần suất sự cố tăng đột biến (> ${MAX_ALERTS_PER_MINUTE} lỗi/phút).`,
+          `🛡️ Hệ thống tự động tạm dừng gửi thông báo đơn lẻ trong 3 phút để chống nghẽn và tránh bị Telegram khóa bot.`,
+          `👉 Vui lòng mở Dashboard để theo dõi toàn bộ log chi tiết.`,
+        ].join('\n');
+        await sendTelegramMessage(token, chatId, stormAlertMsg);
+        return;
+      } else {
+        stormSuppressedCount++;
+        return; // Đang trong storm mode, nén toàn bộ
+      }
+    }
+
+    // 3. Chuẩn hóa Fingerprint & Chống trùng lặp theo từng lỗi
+    const app = (payload.app_identifier || 'Unknown App').trim();
+    const jobId = payload.job_id || null;
+    let fingerprintKey = '';
+    let cooldownMs = 180000; // 3 phút mặc định
+
+    if (type === 'fatal_crash') {
+      const normalizedMsg = normalizeErrorFingerprint(payload.error_message);
+      fingerprintKey = `crash:${app}:${normalizedMsg}`;
+      cooldownMs = 120000; // 2 phút cho crash
+    } else if (type === 'api_500') {
+      const normalizedEndpoint = normalizeErrorFingerprint(payload.endpoint);
+      const method = payload.method || 'GET';
+      fingerprintKey = `api500:${app}:${method}:${normalizedEndpoint}`;
+      cooldownMs = 180000; // 3 phút cho api 500
+    }
+
+    let trackEntry = alertThrottleMap.get(fingerprintKey);
+    if (trackEntry) {
+      if (now - trackEntry.lastSent < cooldownMs) {
+        // Vẫn đang trong thời gian nén (cooldown)
+        trackEntry.suppressedCount = (trackEntry.suppressedCount || 0) + 1;
+        return;
+      }
+    } else {
+      trackEntry = { lastSent: 0, suppressedCount: 0 };
+      alertThrottleMap.set(fingerprintKey, trackEntry);
+    }
+
+    // 4. Giãn cách an toàn giữa 2 tin nhắn bất kỳ (Global Minimum Interval)
+    if (now - globalLastAlertSentTime < GLOBAL_MIN_INTERVAL_MS) {
+      trackEntry.suppressedCount = (trackEntry.suppressedCount || 0) + 1;
+      return;
+    }
+
+    // 5. Chuẩn bị thông tin định danh (Dự án, môi trường, tần suất nén)
+    const timeStr = new Date(now + VN_OFFSET_HOURS * 3600000)
       .toISOString()
       .slice(0, 19)
       .replace('T', ' ');
 
-    if (type === 'fatal_crash') {
-      if (settings.telegram_alert_crashes === '0') return;
-      const key = `crash:${payload.app_identifier}:${String(payload.error_message || '').slice(0, 40)}`;
-      const lastSent = telegramAlertThrottle.get(key) || 0;
-      if (Date.now() - lastSent < 60000) return; // 1 phút chống spam cùng lỗi
-      telegramAlertThrottle.set(key, Date.now());
+    const resolvedJobName = await getJobDisplayName(db, app, jobId);
+    const projectName = resolvedJobName || app;
+    const isTestEnv = /dev|test|stag|localhost|demo/i.test(app);
+    const envBadge = isTestEnv ? '🟡 [STAGING/TEST]' : '🔴 [PRODUCTION]';
 
-      const app = payload.app_identifier || 'Unknown App';
+    const frequencyNote = trackEntry.suppressedCount > 0
+      ? `🔁 <b>Tần suất dồn:</b> Đã lặp lại thêm <b>${trackEntry.suppressedCount} lần</b> trong ${Math.max(1, Math.round((now - trackEntry.lastSent) / 60000))} phút qua (Đã tự động nén chống spam)`
+      : null;
+
+    let msg = '';
+
+    if (type === 'fatal_crash') {
       const device = payload.device_name || 'Thiết bị di động';
       const user = payload.user_name || 'Khách';
-      const errMsg = String(payload.error_message || 'Sự cố không xác định').slice(0, 250);
-      const stack = String(payload.stack_trace || '').slice(0, 300);
+      const errMsg = String(payload.error_message || 'Sự cố không xác định').slice(0, 300);
+      const stack = String(payload.stack_trace || '').slice(0, 400);
 
-      const msg = [
-        `🚨 <b>[Gden Flow] CẢNH BÁO SẬP APP (FATAL CRASH)</b>`,
-        `📱 <b>App:</b> <code>${escapeHtml(app)}</code>`,
+      msg = [
+        `🚨 <b>${envBadge} CẢNH BÁO SẬP APP (FATAL CRASH)</b>`,
+        `🏢 <b>Dự án:</b> <b>${escapeHtml(projectName)}</b>`,
+        `📱 <b>App ID:</b> <code>${escapeHtml(app)}</code>`,
         `📟 <b>Thiết bị:</b> ${escapeHtml(device)}`,
         `👤 <b>Người dùng:</b> ${escapeHtml(user)}`,
         `💥 <b>Lỗi:</b> <code>${escapeHtml(errMsg)}</code>`,
+        frequencyNote,
         stack ? `📜 <b>Stack Trace:</b>\n<pre>${escapeHtml(stack)}</pre>` : '',
-        `🕒 <b>Thời gian (VN):</b> ${timeStr}`,
+        `🕒 <b>Thời gian:</b> ${timeStr}`,
       ].filter(Boolean).join('\n');
-
-      await sendTelegramMessage(token, chatId, msg);
     } else if (type === 'api_500') {
-      if (settings.telegram_alert_api500 !== '1') return;
-      const key = `api500:${payload.app_identifier}:${payload.endpoint}`;
-      const lastSent = telegramAlertThrottle.get(key) || 0;
-      if (Date.now() - lastSent < 120000) return; // 2 phút chống spam cùng endpoint
-      telegramAlertThrottle.set(key, Date.now());
-
-      const app = payload.app_identifier || 'Unknown App';
       const endpoint = payload.endpoint || '';
       const method = payload.method || 'GET';
       const status = payload.status_code || 500;
-      const errMsg = String(payload.error_message || '').slice(0, 200);
+      const errMsg = String(payload.error_message || '').slice(0, 250);
 
-      const msg = [
-        `⚠️ <b>[Gden Flow] CẢNH BÁO LỖI MÁY CHỦ API (${status})</b>`,
-        `📱 <b>App:</b> <code>${escapeHtml(app)}</code>`,
+      msg = [
+        `⚠️ <b>${envBadge} CẢNH BÁO LỖI MÁY CHỦ API (${status})</b>`,
+        `🏢 <b>Dự án:</b> <b>${escapeHtml(projectName)}</b>`,
+        `📱 <b>App ID:</b> <code>${escapeHtml(app)}</code>`,
         `🔗 <b>Endpoint:</b> <code>${escapeHtml(method)} ${escapeHtml(endpoint)}</code>`,
         errMsg ? `💥 <b>Chi tiết:</b> <code>${escapeHtml(errMsg)}</code>` : '',
-        `🕒 <b>Thời gian (VN):</b> ${timeStr}`,
+        frequencyNote,
+        `🕒 <b>Thời gian:</b> ${timeStr}`,
       ].filter(Boolean).join('\n');
+    }
 
-      await sendTelegramMessage(token, chatId, msg);
+    if (msg) {
+      const ok = await sendTelegramMessage(token, chatId, msg);
+      if (ok) {
+        trackEntry.lastSent = now;
+        trackEntry.suppressedCount = 0;
+        globalLastAlertSentTime = now;
+        alertsSentThisMinute++;
+      }
     }
   } catch (e) {
     console.error('triggerTelegramAlert error:', e);
@@ -1637,6 +1795,7 @@ export default {
             method,
             status_code,
             error_message,
+            job_id: effectiveJobId,
           }).catch(() => {});
         }
 
@@ -1767,6 +1926,7 @@ export default {
             is_fatal: 1,
             device_name: crashDevice,
             user_name: crashUser,
+            job_id: effectiveJobId,
           }).catch(() => {});
         }
 
@@ -2505,6 +2665,7 @@ export default {
         const statements = [];
 
         // 1. Logs
+        let batchApi500AlertTriggered = false;
         for (const log of logs) {
           const lApp = (log.app_identifier || log.app_id || effectiveApp).trim();
           const lDevice = (log.device_name || device_name || '').trim();
@@ -2532,18 +2693,22 @@ export default {
             )
           );
 
-          if (log.status_code && Number(log.status_code) >= 500) {
+          // Chỉ kích hoạt tối đa 1 lỗi API 500 trong cùng một batch để chống flood/quá tải subrequests
+          if (!batchApi500AlertTriggered && log.status_code && Number(log.status_code) >= 500) {
+            batchApi500AlertTriggered = true;
             triggerTelegramAlert(env.DB, 'api_500', {
               app_identifier: lApp,
               endpoint: log.endpoint,
               method: log.method,
               status_code: log.status_code,
               error_message: log.error_message,
+              job_id: effectiveJobId,
             }).catch(() => {});
           }
         }
 
         // 2. Crashes
+        let batchCrashAlertTriggered = false;
         for (const crash of crashes) {
           const cApp = (crash.app_identifier || crash.app_id || effectiveApp).trim();
           const isFatal = crash.is_fatal ? 1 : 0;
@@ -2564,7 +2729,9 @@ export default {
             )
           );
 
-          if (isFatal) {
+          // Chỉ kích hoạt tối đa 1 lỗi Crash trong cùng một batch để chống flood/quá tải subrequests
+          if (!batchCrashAlertTriggered && isFatal) {
+            batchCrashAlertTriggered = true;
             triggerTelegramAlert(env.DB, 'fatal_crash', {
               app_identifier: cApp,
               error_message: crash.error_message,
@@ -2572,6 +2739,7 @@ export default {
               is_fatal: 1,
               device_name: crash.device_name || device_name,
               user_name: crash.user_name || user_name,
+              job_id: effectiveJobId,
             }).catch(() => {});
           }
         }

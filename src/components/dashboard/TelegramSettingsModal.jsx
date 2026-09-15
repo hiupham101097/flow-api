@@ -269,6 +269,22 @@ function TelegramSettingsModal({ isOpen, onClose, onSaved }) {
                   <strong>Báo cáo khi API trả về mã lỗi 500 (Server Error)</strong> — <span style={{ color: 'var(--text-muted)' }}>Gửi khi máy chủ backend gặp ngoại lệ</span>
                 </span>
               </label>
+
+              {/* Overload & Anti-Spam Indicator */}
+              <div
+                style={{
+                  marginTop: '0.85rem',
+                  padding: '0.65rem 0.85rem',
+                  borderRadius: '6px',
+                  background: 'rgba(56, 189, 248, 0.08)',
+                  border: '1px solid rgba(56, 189, 248, 0.25)',
+                  fontSize: '0.78rem',
+                  color: 'var(--text-muted)',
+                  lineHeight: 1.5,
+                }}
+              >
+                🛡️ <strong>Cơ chế chống bão lỗi & quá tải (Anti-Storm & Anti-Spam):</strong> Hệ thống tự động chuẩn hoá lỗi, nén tần suất lặp lại, và ngắt mạch chống ngập (Storm Circuit Breaker) để không bao giờ bị Telegram chặn mã 429 hay làm phiền nhóm của bạn.
+              </div>
             </div>
           </form>
         </div>
