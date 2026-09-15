@@ -15,7 +15,7 @@
 /// ```dart
 /// // 1. Khai báo một lần lúc mở app
 /// KycFunnelReporter.configure(
-///   baseUrl: 'https://flow-api.hieupham101097.workers.dev',
+///   baseUrl: 'https://flow-api.flow-api.workers.dev',
 ///   appId: 'com.cong.ty.app',       // khớp app_identifier trên dashboard
 /// );
 /// // Sau khi đăng nhập:

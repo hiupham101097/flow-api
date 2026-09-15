@@ -39,7 +39,7 @@ class AppTelemetry {
   static String? _appId;
   static String? _deviceName;
   static String? _userName;
-  static String _serverUrl = 'https://flow-api.hieupham101097.workers.dev';
+  static String _serverUrl = 'https://flow-api.flow-api.workers.dev';
 
   /// Khởi tạo telemetry với appId, tên thiết bị và tên người dùng (tùy chọn)
   /// Nếu để trống deviceName, hệ thống sẽ tự động phát hiện hệ điều hành (Android / iOS)
@@ -198,7 +198,7 @@ class LoggingClient extends http.BaseClient {
   LoggingClient(
     this._inner, {
     this.appId = 'vn.fizahub.app',
-    this.serverUrl = 'https://flow-api.hieupham101097.workers.dev',
+    this.serverUrl = 'https://flow-api.flow-api.workers.dev',
     this.deviceName,
     this.userName,
   });
@@ -594,7 +594,7 @@ void main() async {
 ```
 
 > 🎯 **Kết quả:** Từ bây giờ, bất kỳ khi nào app bị văng hay gặp exception, toàn bộ **Stack Trace** (dòng code bị lỗi) sẽ lập tức xuất hiện tại tab **💥 Crashlytics** trên Web:
-> 👉 `https://flow-api.hieupham101097.workers.dev/admin/dashboard`
+> 👉 `https://flow-api.flow-api.workers.dev/admin/dashboard`
 
 ---
 
@@ -633,7 +633,7 @@ class MonitorWebViewScreen extends StatefulWidget {
 
   const MonitorWebViewScreen({
     super.key,
-    this.url = 'https://flow-api.hieupham101097.workers.dev/admin/dashboard',
+    this.url = 'https://flow-api.flow-api.workers.dev/admin/dashboard',
     this.title = 'Giám sát Telemetry',
   });
 
@@ -727,7 +727,7 @@ Navigator.push(
 ## 🎯 KIỂM TRA KẾT QUẢ TRÊN WEB DASHBOARD
 
 Sau khi hoàn thành các bước trên và chạy app:
-1. Mở trình duyệt vào: 👉 **https://flow-api.hieupham101097.workers.dev/admin/dashboard**
+1. Mở trình duyệt vào: 👉 **https://flow-api.flow-api.workers.dev/admin/dashboard**
 2. Quan sát 3 mục:
    * **📡 API Logs**: Thấy cuộc gọi login mã **200 OK**, thời gian chạy (ms) và dữ liệu trả về.
    * **💥 Crashlytics**: Nếu app gặp lỗi, bạn bấm vào nút **"Stack Trace"** để xem ngay lỗi ở file nào, dòng bao nhiêu.

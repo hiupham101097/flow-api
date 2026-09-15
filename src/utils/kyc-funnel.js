@@ -16,7 +16,7 @@
  *
  * // 1. Khai báo một lần lúc khởi động
  * configureKycFunnel({
- *   baseUrl: 'https://flow-api.hieupham101097.workers.dev',
+ *   baseUrl: 'https://flow-api.flow-api.workers.dev',
  *   appId: 'cong-ty-web',
  * });
  *

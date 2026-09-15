@@ -1,7 +1,7 @@
 # 📋 HƯỚNG DẪN TÍCH HỢP APILOGGER & TELEMETRY VÀO DỰ ÁN FLUTTER (FIZAHUB)
 
 > 🎯 **Mục đích:** Tự động ghi nhận toàn bộ lịch sử gọi API, bắt lỗi sập app (Crash) và sự kiện (Analytics) gửi về Cloudflare Server để theo dõi trên Web Dashboard.  
-> 📊 **Dashboard xem log:** `https://flow-api.hieupham101097.workers.dev/admin/dashboard`  
+> 📊 **Dashboard xem log:** `https://flow-api.flow-api.workers.dev/admin/dashboard`  
 > 🏷️ **Thông tin hiển thị:** Dashboard sẽ tự động hiển thị đầy đủ:
 > - **Tên người dùng (`user_name`)**: Tên tài khoản sau khi login (ví dụ: `Phạm Minh Hiếu`).
 > - **Tên thiết bị (`device_name`)**: Tên dòng máy thật (ví dụ: `iPhone 14 Pro`, `Samsung Galaxy S23`...).
@@ -35,7 +35,7 @@ class AppTelemetry {
   static String _defaultAppId = 'vn.fizahub.app';
   static String? _deviceName;
   static String? _userName;
-  static const String serverUrl = 'https://flow-api.hieupham101097.workers.dev';
+  static const String serverUrl = 'https://flow-api.flow-api.workers.dev';
 
   /// Khởi tạo Telemetry khi mở app (gọi trong main.dart)
   static Future<void> initialize({

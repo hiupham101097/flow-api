@@ -127,7 +127,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   KycFunnelReporter.configure(
-    baseUrl: 'https://flow-api.hieupham101097.workers.dev',
+    baseUrl: 'https://flow-api.flow-api.workers.dev',
     appId: 'com.cong.ty.app', // khớp app_identifier của bảng jobs
   );
 
@@ -201,7 +201,7 @@ Copy `src/utils/kyc-funnel.js`, không phụ thuộc thư viện nào:
 import { configureKycFunnel, KycFunnel, KYC_STEPS, KYC_OUTCOME } from './kyc-funnel';
 
 configureKycFunnel({
-  baseUrl: 'https://flow-api.hieupham101097.workers.dev',
+  baseUrl: 'https://flow-api.flow-api.workers.dev',
   appId: 'cong-ty-web',
 });
 

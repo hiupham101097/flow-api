@@ -68,7 +68,7 @@ class LoggingClient extends http.BaseClient {
 
   static const String _apiMonitorUrl = String.fromEnvironment(
     'API_MONITOR_URL',
-    defaultValue: 'https://flow-api.hieupham101097.workers.dev',
+    defaultValue: 'https://flow-api.flow-api.workers.dev',
   );
 
   final String? deviceName;
@@ -219,7 +219,7 @@ class LoggingClient extends http.BaseClient {
 class ApiLogger {
   static const String defaultEndpoint = String.fromEnvironment(
     'API_MONITOR_URL',
-    defaultValue: 'https://flow-api.hieupham101097.workers.dev',
+    defaultValue: 'https://flow-api.flow-api.workers.dev',
   );
 
   static void record({
@@ -292,7 +292,7 @@ class AppTelemetry {
   static String? _userName;
   static const String defaultEndpoint = String.fromEnvironment(
     'API_MONITOR_URL',
-    defaultValue: 'https://flow-api.hieupham101097.workers.dev',
+    defaultValue: 'https://flow-api.flow-api.workers.dev',
   );
 
   /// Khởi tạo mã App ID, Tên thiết bị và Tên người dùng cho toàn bộ telemetry

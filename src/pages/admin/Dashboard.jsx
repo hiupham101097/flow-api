@@ -7,7 +7,7 @@ import SystemHealthSummary from '../../components/dashboard/SystemHealthSummary'
 import IssueManagementPanel from '../../components/dashboard/IssueManagementPanel';
 import { exportToCsv } from '../../utils/exportCsv';
 
-const API_MONITOR_URL = import.meta.env.VITE_WORKER_URL || 'https://flow-api.hieupham101097.workers.dev';
+const API_MONITOR_URL = import.meta.env.VITE_WORKER_URL || 'https://flow-api.flow-api.workers.dev';
 
 // Màu của từng nhóm kết quả, dùng chung cho cột chồng, chú giải và biểu đồ ngày
 const OUTCOME_COLORS = {

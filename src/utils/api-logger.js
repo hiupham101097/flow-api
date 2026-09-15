@@ -4,7 +4,7 @@
  * Replace the `WORKER_URL` with your deployed Cloudflare Worker URL.
  */
 
-const WORKER_URL = 'https://flow-api.hieupham101097.workers.dev/logs'; // Replace with live URL after deployment
+const WORKER_URL = 'https://flow-api.flow-api.workers.dev/logs'; // Replace with live URL after deployment
 
 /**
  * Utility to log API telemetry to the monitor in the background.
