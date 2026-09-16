@@ -1,8 +1,11 @@
 import React from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import '../styles/global.css';
+import { usePlatform } from '../context/PlatformContext';
 
 function AdminLayout() {
+  const { platformScope, openPlatformModal } = usePlatform();
+
   return (
     <div className="dashboard-shell">
       <header className="topbar">
@@ -41,12 +44,38 @@ function AdminLayout() {
               className={({ isActive }) => `nav-tab-link ${isActive ? 'active' : ''}`}
             >
               <span>👥</span>
-              <span>Người dùng & Job (App/Web)</span>
+              <span>Người dùng & Job ({platformScope === 'web' ? 'Web' : 'App'})</span>
             </NavLink>
           </nav>
         </div>
 
-        <div className="topbar-actions">
+        <div className="topbar-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+          {/* Nút chuyển đổi nhanh Platform Scope (App / Web) */}
+          <button
+            type="button"
+            onClick={openPlatformModal}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              padding: '0.42rem 0.85rem',
+              borderRadius: '20px',
+              border: `1px solid ${platformScope === 'web' ? 'rgba(34, 211, 238, 0.45)' : 'rgba(167, 139, 250, 0.45)'}`,
+              background: platformScope === 'web' ? 'rgba(34, 211, 238, 0.12)' : 'rgba(167, 139, 250, 0.12)',
+              color: platformScope === 'web' ? '#67e8f9' : '#c4b5fd',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              transition: 'all 0.18s ease',
+            }}
+            title="Bấm để đổi chế độ xem giữa Web App và Mobile App"
+          >
+            <span>{platformScope === 'web' ? '🌐 Quản lý: Web App' : '📱 Quản lý: Mobile App'}</span>
+            <span style={{ fontSize: '0.72rem', opacity: 0.8, marginLeft: '0.2rem', padding: '0.1rem 0.4rem', borderRadius: '10px', background: 'rgba(255,255,255,0.08)' }}>
+              ⇄ Đổi
+            </span>
+          </button>
+
           <span className="live-indicator"><span aria-hidden="true" /> Cloudflare D1 · Active</span>
         </div>
       </header>

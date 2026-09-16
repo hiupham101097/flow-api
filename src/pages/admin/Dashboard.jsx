@@ -6,8 +6,36 @@ import UserJourneyTimeline from '../../components/dashboard/UserJourneyTimeline'
 import SystemHealthSummary from '../../components/dashboard/SystemHealthSummary';
 import IssueManagementPanel from '../../components/dashboard/IssueManagementPanel';
 import { exportToCsv } from '../../utils/exportCsv';
+import { usePlatform } from '../../context/PlatformContext';
 
 const API_MONITOR_URL = import.meta.env.VITE_WORKER_URL || 'https://flow-api.hieupham101097.workers.dev';
+
+// Nhận diện dữ liệu thuộc Web hay Mobile App
+function isItemWeb(item) {
+  if (!item) return false;
+  if (item.job_type === 'web') return true;
+  if (item.job_type === 'app') return false;
+
+  const dev = String(item.device_name || item.device_info || '').toLowerCase();
+  const app = String(item.app_identifier || '').toLowerCase();
+  const ep = String(item.endpoint || '').toLowerCase();
+  if (
+    dev.includes('chrome') ||
+    dev.includes('safari') ||
+    dev.includes('firefox') ||
+    dev.includes('edge') ||
+    dev.includes('browser') ||
+    dev.includes('trình duyệt') ||
+    dev.includes('windows 1') ||
+    dev.includes('macos') ||
+    app.includes('web') ||
+    app.includes('portal') ||
+    ep.includes('myportal')
+  ) {
+    return true;
+  }
+  return false;
+}
 
 // Màu của từng nhóm kết quả, dùng chung cho cột chồng, chú giải và biểu đồ ngày
 const OUTCOME_COLORS = {
@@ -326,9 +354,14 @@ function Dashboard() {
   const [selectedCrash, setSelectedCrash] = useState(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
 
+  const { platformScope, openPlatformModal } = usePlatform();
   const [copiedItem, setCopiedItem] = useState(null);
   const [integrationOpen, setIntegrationOpen] = useState(false);
-  const [setupTab, setSetupTab] = useState('crashlytics');
+  const [setupTab, setSetupTab] = useState(platformScope === 'web' ? 'angular' : 'crashlytics');
+
+  useEffect(() => {
+    setSetupTab(platformScope === 'web' ? 'angular' : 'crashlytics');
+  }, [platformScope]);
 
   // User & Job Filtering State
   const [filterMeta, setFilterMeta] = useState({ apps: [], devices: [], users: [] });
@@ -739,7 +772,7 @@ function Dashboard() {
             filterValue: String(app.filterValue || app.id),
             job_name: app.job_name || app.name,
             app_identifier: app.app_identifier || '',
-            job_type: app.job_type || 'app',
+            job_type: app.job_type || (isItemWeb(app) ? 'web' : 'app'),
             name: app.user_name || app.name || 'Hệ thống',
           });
         }
@@ -777,14 +810,20 @@ function Dashboard() {
           filterValue: item.job_id ? String(item.job_id) : appId,
           job_name: item.job_name || appId,
           app_identifier: appId,
-          job_type: 'app',
-          name: item.user_name || 'App Telemetry',
+          job_type: item.job_type || (isItemWeb(item) ? 'web' : 'app'),
+          name: item.user_name || 'Telemetry App',
         });
       }
     });
 
+    if (platformScope === 'web') {
+      return list.filter((item) => item.job_type === 'web');
+    }
+    if (platformScope === 'app') {
+      return list.filter((item) => item.job_type === 'app');
+    }
     return list;
-  }, [filterMeta.apps, usersList, logs, crashes, events]);
+  }, [filterMeta.apps, usersList, logs, crashes, events, platformScope]);
 
   const activeUserJob = useMemo(() => {
     if (!selectedFilter || selectedFilter === 'all') return null;
@@ -795,7 +834,21 @@ function Dashboard() {
     ) || null;
   }, [selectedFilter, availableJobs]);
 
-  const currentAppId = activeUserJob?.app_identifier || 'vn.fizahub.app';
+  const currentAppId = activeUserJob?.app_identifier || (platformScope === 'web' ? 'vn.myportal.web' : 'vn.fizahub.app');
+
+  // Tự động chuyển bộ lọc về 'all' nếu job đang chọn không thuộc nền tảng hiện tại
+  useEffect(() => {
+    if (selectedFilter && selectedFilter !== 'all') {
+      const exists = availableJobs.some(
+        (u) => String(u.id) === String(selectedFilter) ||
+               String(u.filterValue) === String(selectedFilter) ||
+               String(u.app_identifier) === String(selectedFilter)
+      );
+      if (!exists) {
+        setSelectedFilter('all');
+      }
+    }
+  }, [platformScope, availableJobs]);
 
   // ---- Thống kê sự kiện (funnel) ----
   const fetchFunnels = async () => {
@@ -1017,6 +1070,26 @@ setupAxiosMonitor(axios, '${currentAppId}');`;
 const monitoredFetch = createMonitoredFetch('${currentAppId}');
 const res = await monitoredFetch('https://api.example.com/data');`;
 
+  const angularSnippet = `// 1. Cấu hình trong app.config.ts (Angular 15-19+ Standalone)
+import { ApplicationConfig, ErrorHandler } from '@angular/core';
+import { provideHttpClient, withInterceptors } from '@angular/common/http';
+import { ApiLoggerService, apiLoggerInterceptor, GlobalErrorHandler } from './core/services/api-logger.service';
+
+ApiLoggerService.initialize({
+  appId: '${currentAppId}',
+  serverUrl: '${API_MONITOR_URL}',
+});
+
+export const appConfig: ApplicationConfig = {
+  providers: [
+    provideHttpClient(withInterceptors([apiLoggerInterceptor])),
+    { provide: ErrorHandler, useClass: GlobalErrorHandler },
+  ],
+};
+
+// 2. Cập nhật Tên Người Dùng sau khi Login (trong AuthService/LoginComponent):
+// ApiLoggerService.setUserName(user.fullName || user.username);`;
+
   const formatDate = (dateString) => formatVietnamDateTime(dateString);
 
   const getStatusMeta = (statusCode) => {
@@ -1088,26 +1161,48 @@ const res = await monitoredFetch('https://api.example.com/data');`;
     return curl;
   };
 
+  // Lọc tập dữ liệu theo Platform Scope (Quản lý Web thì chỉ hiển thị Web, Quản lý App thì chỉ hiển thị App)
+  const scopedLogs = useMemo(() => {
+    if (selectedFilter !== 'all') return logs;
+    if (platformScope === 'web') return logs.filter((l) => l.job_type === 'web' || isItemWeb(l));
+    if (platformScope === 'app') return logs.filter((l) => l.job_type === 'app' || (!isItemWeb(l) && l.job_type !== 'web'));
+    return logs;
+  }, [logs, selectedFilter, platformScope]);
+
+  const scopedCrashes = useMemo(() => {
+    if (selectedFilter !== 'all') return crashes;
+    if (platformScope === 'web') return crashes.filter((c) => c.job_type === 'web' || isItemWeb(c));
+    if (platformScope === 'app') return crashes.filter((c) => c.job_type === 'app' || (!isItemWeb(c) && c.job_type !== 'web'));
+    return crashes;
+  }, [crashes, selectedFilter, platformScope]);
+
+  const scopedEvents = useMemo(() => {
+    if (selectedFilter !== 'all') return events;
+    if (platformScope === 'web') return events.filter((e) => e.job_type === 'web' || isItemWeb(e));
+    if (platformScope === 'app') return events.filter((e) => e.job_type === 'app' || (!isItemWeb(e) && e.job_type !== 'web'));
+    return events;
+  }, [events, selectedFilter, platformScope]);
+
   // Status counters for Logs
-  const totalCalls = logs.length;
-  const count200 = logs.filter((log) => log.status_code >= 200 && log.status_code < 300).length;
-  const count400 = logs.filter((log) => log.status_code >= 400 && log.status_code < 500).length;
-  const count500 = logs.filter((log) => log.status_code >= 500 || log.status_code < 200).length;
+  const totalCalls = scopedLogs.length;
+  const count200 = scopedLogs.filter((log) => log.status_code >= 200 && log.status_code < 300).length;
+  const count400 = scopedLogs.filter((log) => log.status_code >= 400 && log.status_code < 500).length;
+  const count500 = scopedLogs.filter((log) => log.status_code >= 500 || log.status_code < 200).length;
   const successRate = totalCalls > 0 ? Math.round((count200 / totalCalls) * 100) : null;
-  const totalDuration = logs.reduce((acc, log) => acc + (Number(log.duration_ms) || 0), 0);
+  const totalDuration = scopedLogs.reduce((acc, log) => acc + (Number(log.duration_ms) || 0), 0);
   const avgDuration = totalCalls > 0 ? Math.round(totalDuration / totalCalls) : 0;
 
   // Status counters for Crashes
-  const totalCrashes = crashes.length;
-  const fatalCrashes = crashes.filter((c) => Number(c.is_fatal) === 1).length;
-  const nonFatalCrashes = crashes.filter((c) => Number(c.is_fatal) !== 1).length;
-  const affectedAppsCount = new Set(crashes.map((c) => c.app_identifier).filter(Boolean)).size;
+  const totalCrashes = scopedCrashes.length;
+  const fatalCrashes = scopedCrashes.filter((c) => Number(c.is_fatal) === 1).length;
+  const nonFatalCrashes = scopedCrashes.filter((c) => Number(c.is_fatal) !== 1).length;
+  const affectedAppsCount = new Set(scopedCrashes.map((c) => c.app_identifier).filter(Boolean)).size;
 
   // Status counters for Analytics
-  const totalEvents = events.length;
-  const screenViewCount = events.filter((e) => e.event_type === 'screen_view' || e.event_name === 'screen_view').length;
+  const totalEvents = scopedEvents.length;
+  const screenViewCount = scopedEvents.filter((e) => e.event_type === 'screen_view' || e.event_name === 'screen_view').length;
   const customEventCount = totalEvents - screenViewCount;
-  const uniqueUsersCount = new Set(events.map((e) => e.user_id).filter(Boolean)).size;
+  const uniqueUsersCount = new Set(scopedEvents.map((e) => e.user_id).filter(Boolean)).size;
 
   // Unique devices and users for quick filtering - tổng hợp từ server API và toàn bộ telemetry
   const uniqueDevices = useMemo(() => {
@@ -1115,8 +1210,8 @@ const res = await monitoredFetch('https://api.example.com/data');`;
     if (Array.isArray(filterMeta.devices)) {
       filterMeta.devices.forEach((d) => { if (d) set.add(String(d)); });
     }
-    logs.forEach((l) => { if (l.device_name) set.add(String(l.device_name)); });
-    crashes.forEach((c) => {
+    scopedLogs.forEach((l) => { if (l.device_name) set.add(String(l.device_name)); });
+    scopedCrashes.forEach((c) => {
       if (c.device_info) {
         try {
           const parsed = JSON.parse(c.device_info);
@@ -1127,7 +1222,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
         }
       }
     });
-    events.forEach((e) => {
+    scopedEvents.forEach((e) => {
       if (e.device_info) {
         try {
           const parsed = JSON.parse(e.device_info);
@@ -1139,7 +1234,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
       }
     });
     return Array.from(set).filter(Boolean).sort();
-  }, [filterMeta.devices, logs, crashes, events]);
+  }, [filterMeta.devices, scopedLogs, scopedCrashes, scopedEvents]);
 
   const uniqueUsers = useMemo(() => {
     const set = new Set();
@@ -1147,18 +1242,18 @@ const res = await monitoredFetch('https://api.example.com/data');`;
     if (Array.isArray(filterMeta.users)) {
       filterMeta.users.forEach((u) => { if (u) set.add(String(u)); });
     }
-    logs.forEach((l) => { if (l.user_name) set.add(String(l.user_name)); });
-    crashes.forEach((c) => { if (c.user_name) set.add(String(c.user_name)); });
-    events.forEach((e) => {
+    scopedLogs.forEach((l) => { if (l.user_name) set.add(String(l.user_name)); });
+    scopedCrashes.forEach((c) => { if (c.user_name) set.add(String(c.user_name)); });
+    scopedEvents.forEach((e) => {
       if (e.user_name) set.add(String(e.user_name));
       else if (e.user_id) set.add(String(e.user_id));
     });
     return Array.from(set).filter(Boolean).sort();
-  }, [filterMeta.users, logs, crashes, events]);
+  }, [filterMeta.users, scopedLogs, scopedCrashes, scopedEvents]);
 
   // Filter and search Logs
   const filteredLogs = useMemo(() => {
-    return logs.filter((log) => {
+    return scopedLogs.filter((log) => {
       const matchesTab = (() => {
         if (activeTab === 'all') return true;
         if (activeTab === '200') return log.status_code >= 200 && log.status_code < 300;
@@ -1184,11 +1279,11 @@ const res = await monitoredFetch('https://api.example.com/data');`;
 
       return endpointMatch || statusMatch || errorMatch || appMatch || userMatch || jobMatch || deviceMatch || ipMatch;
     });
-  }, [logs, activeTab, searchTerm, deviceFilter, userFilter]);
+  }, [scopedLogs, activeTab, searchTerm, deviceFilter, userFilter]);
 
   // Filter and search Crashes
   const filteredCrashes = useMemo(() => {
-    return crashes.filter((crash) => {
+    return scopedCrashes.filter((crash) => {
       if (crashTab === 'fatal' && Number(crash.is_fatal) !== 1) return false;
       if (crashTab === 'non-fatal' && Number(crash.is_fatal) === 1) return false;
 
@@ -1209,11 +1304,11 @@ const res = await monitoredFetch('https://api.example.com/data');`;
 
       return msgMatch || stackMatch || appMatch || userMatch || jobMatch || deviceMatch;
     });
-  }, [crashes, crashTab, searchTerm, deviceFilter, userFilter]);
+  }, [scopedCrashes, crashTab, searchTerm, deviceFilter, userFilter]);
 
   // Filter and search Analytics
   const filteredEvents = useMemo(() => {
-    return events.filter((event) => {
+    return scopedEvents.filter((event) => {
       const isScreen = event.event_type === 'screen_view' || event.event_name === 'screen_view';
       if (eventTab === 'screen_view' && !isScreen) return false;
       if (eventTab === 'custom' && isScreen) return false;
@@ -1237,7 +1332,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
 
       return nameMatch || screenMatch || userMatch || appMatch || jobMatch || paramMatch;
     });
-  }, [events, eventTab, searchTerm, deviceFilter, userFilter]);
+  }, [scopedEvents, eventTab, searchTerm, deviceFilter, userFilter]);
 
   // Sliced data cho phân trang (Cắt nhỏ danh sách hiển thị, tăng tốc 60 FPS cho WebView)
   const paginatedLogs = useMemo(() => {
@@ -1300,9 +1395,14 @@ const res = await monitoredFetch('https://api.example.com/data');`;
           <button
             type="button"
             className="secondary-btn"
-            onClick={() => setIntegrationOpen((prev) => !prev)}
+            onClick={() => {
+              if (!integrationOpen) {
+                setSetupTab(platformScope === 'web' ? 'angular' : 'crashlytics');
+              }
+              setIntegrationOpen((prev) => !prev);
+            }}
           >
-            🔌 Cấu hình SDK ({activeUserJob?.job_type === 'web' ? 'Web' : 'App'})
+            🔌 Cấu hình SDK ({platformScope === 'web' ? 'Web / Angular' : 'Flutter App'})
           </button>
           <button
             type="button"
@@ -1367,7 +1467,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
           onClick={() => { setTelemetryMode('logs'); setSearchTerm(''); }}
         >
           <span>📡 API Logs</span>
-          <span className="mode-badge">{logs.length}</span>
+          <span className="mode-badge">{scopedLogs.length}</span>
         </button>
         <button
           type="button"
@@ -1382,7 +1482,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
               color: fatalCrashes > 0 && telemetryMode !== 'crashes' ? '#ff7785' : undefined,
             }}
           >
-            {crashes.length}
+            {scopedCrashes.length}
           </span>
         </button>
         <button
@@ -1391,7 +1491,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
           onClick={() => { setTelemetryMode('analytics'); setSearchTerm(''); }}
         >
           <span>📈 Analytics & Sự kiện</span>
-          <span className="mode-badge">{events.length}</span>
+          <span className="mode-badge">{scopedEvents.length}</span>
         </button>
         <button
           type="button"
@@ -1431,19 +1531,48 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                   <span style={{ color: 'var(--text-dim)' }}> — Người phụ trách: {activeUserJob.name} (<code>{activeUserJob.app_identifier}</code>)</span>
                 </>
               ) : (
-                'Toàn bộ hệ thống (Hiển thị tất cả Users & Jobs)'
+                platformScope === 'web'
+                  ? 'Toàn bộ Web App (Chỉ hiển thị API & Telemetry từ Web)'
+                  : 'Toàn bộ Mobile App (Chỉ hiển thị dữ liệu từ App di động)'
               )}
             </span>
           </div>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={openPlatformModal}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              padding: '0.38rem 0.75rem',
+              borderRadius: '20px',
+              border: `1px solid ${platformScope === 'web' ? 'rgba(34, 211, 238, 0.45)' : 'rgba(167, 139, 250, 0.45)'}`,
+              background: platformScope === 'web' ? 'rgba(34, 211, 238, 0.12)' : 'rgba(167, 139, 250, 0.12)',
+              color: platformScope === 'web' ? '#67e8f9' : '#c4b5fd',
+              fontSize: '0.78rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+            title="Bấm để đổi không gian quản lý giữa Web và App"
+          >
+            <span>{platformScope === 'web' ? '🌐 Phạm vi: Web App' : '📱 Phạm vi: Mobile App'}</span>
+            <span style={{ fontSize: '0.7rem', opacity: 0.8 }}>⇄ Đổi</span>
+          </button>
+
           <CustomSelect
             className="user-filter-custom"
             value={selectedFilter}
             onChange={(val) => handleFilterChange(val)}
             options={[
-              { value: 'all', label: '🌐 Toàn bộ hệ thống (Tất cả telemetry)' },
+              {
+                value: 'all',
+                label: platformScope === 'web'
+                  ? '🌐 Toàn bộ Web App (Tất cả web telemetry)'
+                  : '📱 Toàn bộ Mobile App (Tất cả app telemetry)',
+              },
               ...availableJobs.map((u) => ({
                 value: u.filterValue || u.id,
                 label: `${u.job_type === 'app' ? '📱' : '🌐'} ${u.job_name}${u.app_identifier ? ` (${u.app_identifier})` : ''}`,
@@ -1623,7 +1752,7 @@ const res = await monitoredFetch('https://api.example.com/data');`;
             <div className="modal-header">
               <div className="modal-header-info">
                 <span className="platform-tag" style={{ display: 'inline-block', marginBottom: '0.25rem' }}>
-                  {activeUserJob?.job_type === 'web' ? '🌐 Web SDK' : '📱 Flutter & Web Telemetry'}
+                  {platformScope === 'web' ? '🌐 Web & Angular SDK' : '📱 Flutter Mobile SDK'}
                 </span>
                 <h2 style={{ fontSize: '1.2rem', fontWeight: 700, margin: 0 }}>
                   Cấu hình SDK & Kết nối Telemetry
@@ -1657,45 +1786,66 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                 <nav className="setup-tabs">
                   <button
                     type="button"
-                    className={setupTab === 'crashlytics' ? 'active' : ''}
-                    onClick={() => setSetupTab('crashlytics')}
+                    className={setupTab === 'angular' ? 'active' : ''}
+                    onClick={() => setSetupTab('angular')}
                   >
-                    <span>01</span><strong>Flutter Crashlytics</strong><small>Bắt Fatal & Non-fatal</small>
-                  </button>
-                  <button
-                    type="button"
-                    className={setupTab === 'analytics' ? 'active' : ''}
-                    onClick={() => setSetupTab('analytics')}
-                  >
-                    <span>02</span><strong>Flutter Analytics</strong><small>Events & Screen Views</small>
-                  </button>
-                  <button
-                    type="button"
-                    className={setupTab === 'client' ? 'active' : ''}
-                    onClick={() => setSetupTab('client')}
-                  >
-                    <span>03</span><strong>Flutter HTTP</strong><small>LoggingClient</small>
-                  </button>
-                  <button
-                    type="button"
-                    className={setupTab === 'dio' ? 'active' : ''}
-                    onClick={() => setSetupTab('dio')}
-                  >
-                    <span>04</span><strong>Flutter Dio</strong><small>ApiLogger.record()</small>
+                    <span>{platformScope === 'web' ? '01' : '05'}</span>
+                    <strong>Angular Telemetry</strong>
+                    <small>HttpInterceptor & Errors</small>
                   </button>
                   <button
                     type="button"
                     className={setupTab === 'axios' ? 'active' : ''}
                     onClick={() => setSetupTab('axios')}
                   >
-                    <span>05</span><strong>Web Axios</strong><small>setupAxiosMonitor</small>
+                    <span>{platformScope === 'web' ? '02' : '06'}</span>
+                    <strong>Web Axios</strong>
+                    <small>setupAxiosMonitor</small>
                   </button>
                   <button
                     type="button"
                     className={setupTab === 'fetch' ? 'active' : ''}
                     onClick={() => setSetupTab('fetch')}
                   >
-                    <span>06</span><strong>Web Fetch</strong><small>createMonitoredFetch</small>
+                    <span>{platformScope === 'web' ? '03' : '07'}</span>
+                    <strong>Web Fetch</strong>
+                    <small>createMonitoredFetch</small>
+                  </button>
+                  <button
+                    type="button"
+                    className={setupTab === 'crashlytics' ? 'active' : ''}
+                    onClick={() => setSetupTab('crashlytics')}
+                  >
+                    <span>{platformScope === 'web' ? '04' : '01'}</span>
+                    <strong>Flutter Crashlytics</strong>
+                    <small>Bắt Fatal & Non-fatal</small>
+                  </button>
+                  <button
+                    type="button"
+                    className={setupTab === 'analytics' ? 'active' : ''}
+                    onClick={() => setSetupTab('analytics')}
+                  >
+                    <span>{platformScope === 'web' ? '05' : '02'}</span>
+                    <strong>Flutter Analytics</strong>
+                    <small>Events & Screen Views</small>
+                  </button>
+                  <button
+                    type="button"
+                    className={setupTab === 'client' ? 'active' : ''}
+                    onClick={() => setSetupTab('client')}
+                  >
+                    <span>{platformScope === 'web' ? '06' : '03'}</span>
+                    <strong>Flutter HTTP</strong>
+                    <small>LoggingClient</small>
+                  </button>
+                  <button
+                    type="button"
+                    className={setupTab === 'dio' ? 'active' : ''}
+                    onClick={() => setSetupTab('dio')}
+                  >
+                    <span>{platformScope === 'web' ? '07' : '04'}</span>
+                    <strong>Flutter Dio</strong>
+                    <small>ApiLogger.record()</small>
                   </button>
                 </nav>
 
@@ -1763,6 +1913,40 @@ const res = await monitoredFetch('https://api.example.com/data');`;
                         copiedItem={copiedItem}
                         onCopy={copyToClipboard}
                       />
+                    </div>
+                  )}
+
+                  {setupTab === 'angular' && (
+                    <div className="setup-pane">
+                      <div className="pane-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.85rem' }}>
+                        <div>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.2rem 0.55rem', borderRadius: '12px', background: 'rgba(221, 0, 49, 0.12)', border: '1px solid rgba(221, 0, 49, 0.3)', marginBottom: '0.35rem', color: '#ff6b81', fontSize: '0.74rem', fontWeight: 600 }}>
+                            <span>🅰️</span> Angular SDK (Standalone & NgModule)
+                          </div>
+                          <h3 style={{ margin: '0.2rem 0' }}>Tích hợp Angular HttpInterceptor & ErrorHandler</h3>
+                          <p>Tự động ghi nhận mã lỗi 4xx/5xx, độ trễ và ngoại lệ JavaScript runtime gửi về Dashboard:</p>
+                        </div>
+                        <a
+                          href="/angular/api-logger.service.ts"
+                          download="api-logger.service.ts"
+                          className="secondary-btn"
+                          style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.45rem 0.85rem', fontSize: '0.8rem' }}
+                        >
+                          <span>📥</span> Tải file api-logger.service.ts
+                        </a>
+                      </div>
+
+                      <CodeBlock
+                        label="Angular Configuration (app.config.ts / Standalone)"
+                        value={angularSnippet}
+                        copyKey="angular"
+                        copiedItem={copiedItem}
+                        onCopy={copyToClipboard}
+                      />
+
+                      <div style={{ marginTop: '1.15rem', padding: '0.85rem 1rem', borderRadius: '10px', background: 'rgba(34, 211, 238, 0.07)', border: '1px solid rgba(34, 211, 238, 0.25)', fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                        <strong style={{ color: '#67e8f9' }}>💡 Hướng dẫn chi tiết:</strong> Xem tài liệu <code style={{ color: '#fff' }}>HUONG_DAN_ANGULAR_APILOG.md</code> tại thư mục gốc của project để xem prompt copy gửi cho AI dev Angular và hướng dẫn chi tiết cho cả Angular NgModule cũ.
+                      </div>
                     </div>
                   )}
 
