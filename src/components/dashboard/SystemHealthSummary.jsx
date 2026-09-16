@@ -1,19 +1,24 @@
 import React, { useState, useEffect } from 'react';
 
-function SystemHealthSummary({ selectedApp = '' }) {
+function SystemHealthSummary({ selectedApp = '', platformScope = 'app' }) {
   const [health, setHealth] = useState(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     fetchHealth();
-  }, [selectedApp]);
+  }, [selectedApp, platformScope]);
 
   const fetchHealth = async () => {
     setLoading(true);
     try {
-      const url = selectedApp && selectedApp !== 'all'
-        ? `/telemetry/health?app_identifier=${encodeURIComponent(selectedApp)}`
-        : '/telemetry/health';
+      const queryParams = new URLSearchParams();
+      if (platformScope) {
+        queryParams.set('platform', platformScope);
+      }
+      if (selectedApp && selectedApp !== 'all') {
+        queryParams.set('app_identifier', selectedApp);
+      }
+      const url = `/telemetry/health?${queryParams.toString()}`;
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
@@ -84,7 +89,7 @@ function SystemHealthSummary({ selectedApp = '' }) {
         </span>
       </div>
 
-      {/* 3. Fatal Crashes */}
+      {/* 3. Fatal Crashes / Runtime Errors */}
       <div
         style={{
           background: health.fatal_crashes > 0 ? 'rgba(255, 119, 133, 0.08)' : 'var(--surface)',
@@ -97,7 +102,7 @@ function SystemHealthSummary({ selectedApp = '' }) {
         }}
       >
         <span style={{ fontSize: '0.76rem', color: health.fatal_crashes > 0 ? '#ff7785' : 'var(--text-muted)' }}>
-          Sự cố sập app (24h)
+          {platformScope === 'web' ? 'Sự cố Runtime / JS (24h)' : 'Sự cố sập app (24h)'}
         </span>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem' }}>
           <strong style={{ fontSize: '1.35rem', color: health.fatal_crashes > 0 ? '#ff4d61' : '#61e5bd' }}>
@@ -106,7 +111,9 @@ function SystemHealthSummary({ selectedApp = '' }) {
           <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>/ {health.total_crashes} sự cố</span>
         </div>
         <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
-          {health.fatal_crashes > 0 ? 'Cần khắc phục ngay' : 'Không có fatal crash'}
+          {health.fatal_crashes > 0
+            ? (platformScope === 'web' ? 'Lỗi JS sập trang / runtime' : 'Cần khắc phục ngay')
+            : (platformScope === 'web' ? 'Không có lỗi JS runtime' : 'Không có fatal crash')}
         </span>
       </div>
 
@@ -122,7 +129,9 @@ function SystemHealthSummary({ selectedApp = '' }) {
           gap: '0.2rem',
         }}
       >
-        <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>Lưu lượng API (24h)</span>
+        <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+          {platformScope === 'web' ? 'Lưu lượng Web API (24h)' : 'Lưu lượng API (24h)'}
+        </span>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem' }}>
           <strong style={{ fontSize: '1.35rem', color: 'var(--text)' }}>
             {health.total_logs}
@@ -146,7 +155,9 @@ function SystemHealthSummary({ selectedApp = '' }) {
           gap: '0.2rem',
         }}
       >
-        <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>Sự kiện Analytics (24h)</span>
+        <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+          {platformScope === 'web' ? 'Sự kiện Web (24h)' : 'Sự kiện Analytics (24h)'}
+        </span>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem' }}>
           <strong style={{ fontSize: '1.35rem', color: 'var(--accent)' }}>
             {health.total_events}
@@ -154,7 +165,7 @@ function SystemHealthSummary({ selectedApp = '' }) {
           <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>events</span>
         </div>
         <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
-          Hành vi người dùng
+          {platformScope === 'web' ? 'Tương tác & Page Views' : 'Hành vi người dùng'}
         </span>
       </div>
     </div>

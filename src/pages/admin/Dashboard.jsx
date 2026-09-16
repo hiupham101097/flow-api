@@ -1543,7 +1543,10 @@ export const appConfig: ApplicationConfig = {
       )}
 
       {/* 24-hour System Health Summary */}
-      <SystemHealthSummary selectedApp={selectedFilter !== 'all' ? selectedFilter : ''} />
+      <SystemHealthSummary
+        selectedApp={selectedFilter !== 'all' ? selectedFilter : ''}
+        platformScope={platformScope}
+      />
 
       {/* Mode Switcher Dock: Issues | Logs | Crashlytics | Analytics | Funnels | Timeline */}
       <div className="telemetry-mode-dock">
@@ -1568,7 +1571,7 @@ export const appConfig: ApplicationConfig = {
           className={`mode-pill-btn ${telemetryMode === 'logs' ? 'active' : ''}`}
           onClick={() => { setTelemetryMode('logs'); setSearchTerm(''); }}
         >
-          <span>📡 API Logs</span>
+          <span>{platformScope === 'web' ? '📡 Nhật ký Web' : '📡 API Logs'}</span>
           <span className="mode-badge">{scopedLogs.length}</span>
         </button>
         <button
@@ -1576,7 +1579,7 @@ export const appConfig: ApplicationConfig = {
           className={`mode-pill-btn ${telemetryMode === 'crashes' ? 'active' : ''}`}
           onClick={() => { setTelemetryMode('crashes'); setSearchTerm(''); }}
         >
-          <span>💥 Crashlytics</span>
+          <span>{platformScope === 'web' ? '💥 Sự cố & Lỗi JS' : '💥 Crashlytics'}</span>
           <span
             className="mode-badge"
             style={{
@@ -1592,7 +1595,7 @@ export const appConfig: ApplicationConfig = {
           className={`mode-pill-btn ${telemetryMode === 'analytics' ? 'active' : ''}`}
           onClick={() => { setTelemetryMode('analytics'); setSearchTerm(''); }}
         >
-          <span>📈 Analytics & Sự kiện</span>
+          <span>{platformScope === 'web' ? '📈 Tương tác Web' : '📈 Analytics & Sự kiện'}</span>
           <span className="mode-badge">{scopedEvents.length}</span>
         </button>
         <button

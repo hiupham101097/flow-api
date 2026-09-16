@@ -2699,16 +2699,30 @@ export default {
     // ==========================================
     if (path === '/telemetry/health' && request.method === 'GET') {
       try {
+        const platform = (url.searchParams.get('platform') || '').trim().toLowerCase();
         const appIdentifier = url.searchParams.get('app_identifier') || url.searchParams.get('app_id') || null;
         let appFilterLogs = '';
         let appFilterCrashes = '';
         let appFilterEvents = '';
-        const params = [];
+        const paramsLogs = [];
+        const paramsCrashes = [];
+        const paramsEvents = [];
+
         if (appIdentifier) {
           appFilterLogs = ' AND app_identifier = ?';
           appFilterCrashes = ' AND app_identifier = ?';
           appFilterEvents = ' AND app_identifier = ?';
-          params.push(appIdentifier);
+          paramsLogs.push(appIdentifier);
+          paramsCrashes.push(appIdentifier);
+          paramsEvents.push(appIdentifier);
+        } else if (platform === 'web') {
+          appFilterLogs = " AND (app_identifier LIKE '%web%' OR app_identifier = 'vn.myportal.web' OR device_name LIKE '%Web%' OR device_name LIKE '%Chrome%' OR device_name LIKE '%Safari%' OR device_name LIKE '%Firefox%' OR device_name LIKE '%Edge%')";
+          appFilterCrashes = " AND (app_identifier LIKE '%web%' OR app_identifier = 'vn.myportal.web')";
+          appFilterEvents = " AND (app_identifier LIKE '%web%' OR app_identifier = 'vn.myportal.web')";
+        } else if (platform === 'app') {
+          appFilterLogs = " AND (app_identifier NOT LIKE '%web%' AND (app_identifier != 'vn.myportal.web' OR app_identifier IS NULL)) AND (device_name IS NULL OR (device_name NOT LIKE '%Chrome%' AND device_name NOT LIKE '%Firefox%' AND device_name NOT LIKE '%Safari%' AND device_name NOT LIKE '%Edge%' AND device_name NOT LIKE '%Web Browser%'))";
+          appFilterCrashes = " AND (app_identifier NOT LIKE '%web%' AND (app_identifier != 'vn.myportal.web' OR app_identifier IS NULL))";
+          appFilterEvents = " AND (app_identifier NOT LIKE '%web%' AND (app_identifier != 'vn.myportal.web' OR app_identifier IS NULL))";
         }
 
         const [logStats, crashStats, eventStats] = await Promise.all([
@@ -2720,19 +2734,19 @@ export default {
               ROUND(AVG(CASE WHEN duration_ms > 0 THEN duration_ms ELSE NULL END), 0) AS avg_duration
             FROM api_logs
             WHERE created_at >= datetime('now', '-24 hours')${appFilterLogs}
-          `).bind(...params).first(),
+          `).bind(...paramsLogs).first(),
           env.DB.prepare(`
             SELECT 
               COUNT(*) AS total,
               SUM(CASE WHEN is_fatal = 1 THEN 1 ELSE 0 END) AS fatal_count
             FROM app_crashes
             WHERE created_at >= datetime('now', '-24 hours')${appFilterCrashes}
-          `).bind(...params).first(),
+          `).bind(...paramsCrashes).first(),
           env.DB.prepare(`
             SELECT COUNT(*) AS total
             FROM app_events
             WHERE created_at >= datetime('now', '-24 hours')${appFilterEvents}
-          `).bind(...params).first(),
+          `).bind(...paramsEvents).first(),
         ]);
 
         const totalLogs = logStats?.total || 0;
