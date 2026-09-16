@@ -26,7 +26,7 @@ function isItemWeb(item) {
     dev.includes('edge') ||
     dev.includes('browser') ||
     dev.includes('trình duyệt') ||
-    dev.includes('windows 1') ||
+    dev.includes('windows') ||
     dev.includes('macos') ||
     app.includes('web') ||
     app.includes('portal') ||
@@ -35,6 +35,25 @@ function isItemWeb(item) {
     return true;
   }
   return false;
+}
+
+// Phân biệt tên thiết bị thuộc Trình duyệt Web hay Điện thoại di động
+function isDeviceWeb(deviceName) {
+  if (!deviceName) return false;
+  const dev = String(deviceName).toLowerCase();
+  return (
+    dev.includes('chrome') ||
+    dev.includes('safari') ||
+    dev.includes('firefox') ||
+    dev.includes('edge') ||
+    dev.includes('browser') ||
+    dev.includes('trình duyệt') ||
+    dev.includes('windows') ||
+    dev.includes('macos') ||
+    dev.includes('linux') ||
+    dev.includes('opera') ||
+    dev.includes('web')
+  );
 }
 
 // Màu của từng nhóm kết quả, dùng chung cho cột chồng, chú giải và biểu đồ ngày
@@ -1204,21 +1223,34 @@ export const appConfig: ApplicationConfig = {
   const customEventCount = totalEvents - screenViewCount;
   const uniqueUsersCount = new Set(scopedEvents.map((e) => e.user_id).filter(Boolean)).size;
 
-  // Unique devices and users for quick filtering - tổng hợp từ server API và toàn bộ telemetry
+  // Danh sách Thiết bị / Trình duyệt duy nhất theo Platform Scope
   const uniqueDevices = useMemo(() => {
     const set = new Set();
-    if (Array.isArray(filterMeta.devices)) {
-      filterMeta.devices.forEach((d) => { if (d) set.add(String(d)); });
-    }
-    scopedLogs.forEach((l) => { if (l.device_name) set.add(String(l.device_name)); });
+
+    const addDevice = (d) => {
+      if (!d) return;
+      const str = String(d).trim();
+      if (!str) return;
+
+      if (platformScope === 'web') {
+        if (isDeviceWeb(str)) set.add(str);
+      } else if (platformScope === 'app') {
+        if (!isDeviceWeb(str) || str.toLowerCase().includes('android') || str.toLowerCase().includes('ios') || str.toLowerCase().includes('iphone') || str.toLowerCase().includes('samsung')) {
+          set.add(str);
+        }
+      } else {
+        set.add(str);
+      }
+    };
+
+    scopedLogs.forEach((l) => { if (l.device_name) addDevice(l.device_name); });
     scopedCrashes.forEach((c) => {
       if (c.device_info) {
         try {
           const parsed = JSON.parse(c.device_info);
-          if (parsed.device || parsed.model || parsed.name) set.add(parsed.device || parsed.model || parsed.name);
-          else if (typeof c.device_info === 'string') set.add(c.device_info);
+          addDevice(parsed.browser || parsed.device || parsed.model || parsed.name);
         } catch {
-          if (typeof c.device_info === 'string') set.add(c.device_info);
+          addDevice(c.device_info);
         }
       }
     });
@@ -1226,22 +1258,29 @@ export const appConfig: ApplicationConfig = {
       if (e.device_info) {
         try {
           const parsed = JSON.parse(e.device_info);
-          if (parsed.device || parsed.model || parsed.name) set.add(parsed.device || parsed.model || parsed.name);
-          else if (typeof e.device_info === 'string') set.add(e.device_info);
+          addDevice(parsed.browser || parsed.device || parsed.model || parsed.name);
         } catch {
-          if (typeof e.device_info === 'string') set.add(e.device_info);
+          addDevice(e.device_info);
         }
       }
     });
-    return Array.from(set).filter(Boolean).sort();
-  }, [filterMeta.devices, scopedLogs, scopedCrashes, scopedEvents]);
 
+    if (Array.isArray(filterMeta.devices)) {
+      filterMeta.devices.forEach(addDevice);
+    }
+
+    return Array.from(set).filter(Boolean).sort();
+  }, [scopedLogs, scopedCrashes, scopedEvents, filterMeta.devices, platformScope]);
+
+  // Danh sách Người dùng duy nhất theo Platform Scope
   const uniqueUsers = useMemo(() => {
     const set = new Set();
-    // Luôn ép về chuỗi: giá trị trong dropdown phải cùng kiểu với giá trị đem so khớp
-    if (Array.isArray(filterMeta.users)) {
-      filterMeta.users.forEach((u) => { if (u) set.add(String(u)); });
-    }
+
+    // Lấy user thuộc về các job của platform hiện tại
+    availableJobs.forEach((job) => {
+      if (job.name && job.name !== 'Hệ thống') set.add(String(job.name));
+    });
+
     scopedLogs.forEach((l) => { if (l.user_name) set.add(String(l.user_name)); });
     scopedCrashes.forEach((c) => { if (c.user_name) set.add(String(c.user_name)); });
     scopedEvents.forEach((e) => {
@@ -1249,7 +1288,20 @@ export const appConfig: ApplicationConfig = {
       else if (e.user_id) set.add(String(e.user_id));
     });
     return Array.from(set).filter(Boolean).sort();
-  }, [filterMeta.users, scopedLogs, scopedCrashes, scopedEvents]);
+  }, [availableJobs, scopedLogs, scopedCrashes, scopedEvents]);
+
+  // Tự động reset deviceFilter và userFilter nếu giá trị đang chọn không thuộc nền tảng hiện tại
+  useEffect(() => {
+    if (deviceFilter !== 'all' && !uniqueDevices.includes(deviceFilter)) {
+      setDeviceFilter('all');
+    }
+  }, [uniqueDevices, deviceFilter]);
+
+  useEffect(() => {
+    if (userFilter !== 'all' && !uniqueUsers.includes(userFilter)) {
+      setUserFilter('all');
+    }
+  }, [uniqueUsers, userFilter]);
 
   // Filter and search Logs
   const filteredLogs = useMemo(() => {
@@ -2064,10 +2116,18 @@ export const appConfig: ApplicationConfig = {
                 value={deviceFilter}
                 onChange={handleDeviceChange}
                 options={[
-                  { value: 'all', label: `📱 Tất cả thiết bị ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}` },
-                  ...uniqueDevices.map((d) => ({ value: d, label: `📱 ${d}` })),
+                  {
+                    value: 'all',
+                    label: platformScope === 'web'
+                      ? `🌐 Tất cả trình duyệt ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}`
+                      : `📱 Tất cả thiết bị ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}`,
+                  },
+                  ...uniqueDevices.map((d) => ({
+                    value: d,
+                    label: `${platformScope === 'web' ? '🌐' : '📱'} ${d}`,
+                  })),
                 ]}
-                ariaLabel="Lọc theo thiết bị"
+                ariaLabel={platformScope === 'web' ? 'Lọc theo trình duyệt' : 'Lọc theo thiết bị'}
               />
 
               <CustomSelect
@@ -2075,10 +2135,15 @@ export const appConfig: ApplicationConfig = {
                 value={userFilter}
                 onChange={handleUserChange}
                 options={[
-                  { value: 'all', label: `👤 Tất cả user ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}` },
+                  {
+                    value: 'all',
+                    label: platformScope === 'web'
+                      ? `👤 Tất cả user web ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}`
+                      : `👤 Tất cả user ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}`,
+                  },
                   ...uniqueUsers.map((u) => ({ value: u, label: `👤 ${u}` })),
                 ]}
-                ariaLabel="Lọc theo người dùng"
+                ariaLabel={platformScope === 'web' ? 'Lọc theo người dùng web' : 'Lọc theo người dùng'}
               />
 
               <label className="search-field">
@@ -2300,7 +2365,7 @@ export const appConfig: ApplicationConfig = {
                   className={`filter-tab tab-danger ${crashTab === 'fatal' ? 'active' : ''}`}
                   onClick={() => setCrashTab('fatal')}
                 >
-                  <span className="dot dot-danger" /> Fatal (Sập App) <span className="tab-count">{fatalCrashes}</span>
+                  <span className="dot dot-danger" /> {platformScope === 'web' ? 'Fatal (Lỗi Runtime)' : 'Fatal (Sập App)'} <span className="tab-count">{fatalCrashes}</span>
                 </button>
                 <button
                   type="button"
@@ -2309,7 +2374,7 @@ export const appConfig: ApplicationConfig = {
                   className={`filter-tab tab-warning ${crashTab === 'non-fatal' ? 'active' : ''}`}
                   onClick={() => setCrashTab('non-fatal')}
                 >
-                  <span className="dot dot-warning" /> Non-fatal (Ngoại lệ) <span className="tab-count">{nonFatalCrashes}</span>
+                  <span className="dot dot-warning" /> {platformScope === 'web' ? 'Non-fatal (Cảnh báo)' : 'Non-fatal (Ngoại lệ)'} <span className="tab-count">{nonFatalCrashes}</span>
                 </button>
               </div>
 
@@ -2318,10 +2383,18 @@ export const appConfig: ApplicationConfig = {
                 value={deviceFilter}
                 onChange={handleDeviceChange}
                 options={[
-                  { value: 'all', label: `📱 Tất cả thiết bị ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}` },
-                  ...uniqueDevices.map((d) => ({ value: d, label: `📱 ${d}` })),
+                  {
+                    value: 'all',
+                    label: platformScope === 'web'
+                      ? `🌐 Tất cả trình duyệt ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}`
+                      : `📱 Tất cả thiết bị ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}`,
+                  },
+                  ...uniqueDevices.map((d) => ({
+                    value: d,
+                    label: `${platformScope === 'web' ? '🌐' : '📱'} ${d}`,
+                  })),
                 ]}
-                ariaLabel="Lọc theo thiết bị"
+                ariaLabel={platformScope === 'web' ? 'Lọc theo trình duyệt' : 'Lọc theo thiết bị'}
               />
 
               <CustomSelect
@@ -2329,10 +2402,15 @@ export const appConfig: ApplicationConfig = {
                 value={userFilter}
                 onChange={handleUserChange}
                 options={[
-                  { value: 'all', label: `👤 Tất cả user ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}` },
+                  {
+                    value: 'all',
+                    label: platformScope === 'web'
+                      ? `👤 Tất cả user web ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}`
+                      : `👤 Tất cả user ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}`,
+                  },
                   ...uniqueUsers.map((u) => ({ value: u, label: `👤 ${u}` })),
                 ]}
-                ariaLabel="Lọc theo người dùng"
+                ariaLabel={platformScope === 'web' ? 'Lọc theo người dùng web' : 'Lọc theo người dùng'}
               />
 
               <label className="search-field">
@@ -2522,7 +2600,7 @@ export const appConfig: ApplicationConfig = {
                   className={`filter-tab tab-success ${eventTab === 'screen_view' ? 'active' : ''}`}
                   onClick={() => setEventTab('screen_view')}
                 >
-                  📱 Screen Views <span className="tab-count">{screenViewCount}</span>
+                  {platformScope === 'web' ? '🌐 Route / Page Views' : '📱 Screen Views'} <span className="tab-count">{screenViewCount}</span>
                 </button>
               </div>
 
@@ -2531,10 +2609,18 @@ export const appConfig: ApplicationConfig = {
                 value={deviceFilter}
                 onChange={handleDeviceChange}
                 options={[
-                  { value: 'all', label: `📱 Tất cả thiết bị ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}` },
-                  ...uniqueDevices.map((d) => ({ value: d, label: `📱 ${d}` })),
+                  {
+                    value: 'all',
+                    label: platformScope === 'web'
+                      ? `🌐 Tất cả trình duyệt ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}`
+                      : `📱 Tất cả thiết bị ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}`,
+                  },
+                  ...uniqueDevices.map((d) => ({
+                    value: d,
+                    label: `${platformScope === 'web' ? '🌐' : '📱'} ${d}`,
+                  })),
                 ]}
-                ariaLabel="Lọc theo thiết bị"
+                ariaLabel={platformScope === 'web' ? 'Lọc theo trình duyệt' : 'Lọc theo thiết bị'}
               />
 
               <CustomSelect
@@ -2542,10 +2628,15 @@ export const appConfig: ApplicationConfig = {
                 value={userFilter}
                 onChange={handleUserChange}
                 options={[
-                  { value: 'all', label: `👤 Tất cả user ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}` },
+                  {
+                    value: 'all',
+                    label: platformScope === 'web'
+                      ? `👤 Tất cả user web ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}`
+                      : `👤 Tất cả user ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}`,
+                  },
                   ...uniqueUsers.map((u) => ({ value: u, label: `👤 ${u}` })),
                 ]}
-                ariaLabel="Lọc theo người dùng"
+                ariaLabel={platformScope === 'web' ? 'Lọc theo người dùng web' : 'Lọc theo người dùng'}
               />
 
               <label className="search-field">
