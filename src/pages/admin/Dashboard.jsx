@@ -470,11 +470,11 @@ function Dashboard() {
     }
   };
 
-  const fetchFilterMetadata = async () => {
+  const fetchFilterMetadata = async (scope = platformScope) => {
     if (isFetchingMetaRef.current) return;
     isFetchingMetaRef.current = true;
     try {
-      const response = await fetch(`${API_MONITOR_URL}/telemetry/filters`, {
+      const response = await fetch(`${API_MONITOR_URL}/telemetry/filters?platform=${encodeURIComponent(scope || 'all')}`, {
         headers: { Accept: 'application/json' },
       });
       if (response.ok) {
@@ -526,7 +526,7 @@ function Dashboard() {
         fetchUsers();
       }
       if ((!filterMeta.apps || filterMeta.apps.length === 0) && !isFetchingMetaRef.current) {
-        fetchFilterMetadata();
+        fetchFilterMetadata(platformScope);
       }
 
       const activeUser = overrideFilter !== undefined ? overrideFilter : selectedFilter;
@@ -534,6 +534,11 @@ function Dashboard() {
       const activeUserName = overrideUser !== undefined ? overrideUser : userFilter;
 
       const queryParts = [];
+
+      // Bắt buộc luôn truyền platform xuống API để server lọc từ gốc
+      if (platformScope) {
+        queryParts.push(`platform=${encodeURIComponent(platformScope)}`);
+      }
 
       if (activeUser && activeUser !== 'all') {
         if (!isNaN(Number(activeUser))) {
@@ -597,10 +602,8 @@ function Dashboard() {
 
       // Cập nhật số lượng sự cố chưa giải quyết cho Tab badge
       try {
-        const issueUrl = `${API_MONITOR_URL}/issues?limit=1&status=unresolved${
-          activeUser && activeUser !== 'all'
-            ? (!isNaN(Number(activeUser)) ? `&job_id=${encodeURIComponent(activeUser)}` : `&app_identifier=${encodeURIComponent(activeUser)}`)
-            : ''
+        const issueUrl = `${API_MONITOR_URL}/issues?limit=1&status=unresolved&platform=${encodeURIComponent(platformScope || 'all')}${
+          activeUser && activeUser !== 'all' ? `&app_identifier=${encodeURIComponent(activeUser)}` : ''
         }`;
         const issueRes = await fetch(issueUrl, fetchOptions);
         if (issueRes.ok) {
@@ -870,9 +873,9 @@ function Dashboard() {
   }, [platformScope, availableJobs]);
 
   // ---- Thống kê sự kiện (funnel) ----
-  const fetchFunnels = async () => {
+  const fetchFunnels = async (scope = platformScope) => {
     try {
-      const response = await fetch(`${API_MONITOR_URL}/funnels`, {
+      const response = await fetch(`${API_MONITOR_URL}/funnels?platform=${encodeURIComponent(scope || 'all')}`, {
         cache: 'no-store',
         headers: { Accept: 'application/json' },
       });
@@ -889,6 +892,20 @@ function Dashboard() {
     }
   };
 
+  // Khi đổi phân hệ (Web <-> App), dọn sạch dữ liệu cũ và nạp lại toàn bộ telemetry mới
+  useEffect(() => {
+    setLogs([]);
+    setCrashes([]);
+    setEvents([]);
+    telemetryRef.current = { logs: [], crashes: [], events: [] };
+    setSelectedFilter('all');
+    setDeviceFilter('all');
+    setUserFilter('all');
+    fetchFilterMetadata(platformScope);
+    fetchAllTelemetry('all', 'all', 'all', { incremental: false });
+    fetchFunnels(platformScope);
+  }, [platformScope]);
+
   const fetchFunnelStats = async (overrides = {}) => {
     const funnelKey = overrides.funnel ?? activeFunnel;
     if (!funnelKey) {
@@ -904,6 +921,7 @@ function Dashboard() {
       });
 
       // Thống kê bám theo đúng bộ lọc đang chọn ở đầu trang
+      if (platformScope) params.set('platform', platformScope);
       const appId = activeUserJob?.app_identifier;
       if (appId) params.set('app_identifier', appId);
       if (deviceFilter && deviceFilter !== 'all') params.set('device', deviceFilter);
@@ -1182,24 +1200,56 @@ export const appConfig: ApplicationConfig = {
 
   // Lọc tập dữ liệu theo Platform Scope (Quản lý Web thì chỉ hiển thị Web, Quản lý App thì chỉ hiển thị App)
   const scopedLogs = useMemo(() => {
-    if (selectedFilter !== 'all') return logs;
-    if (platformScope === 'web') return logs.filter((l) => l.job_type === 'web' || isItemWeb(l));
-    if (platformScope === 'app') return logs.filter((l) => l.job_type === 'app' || (!isItemWeb(l) && l.job_type !== 'web'));
-    return logs;
+    let list = logs;
+    if (platformScope === 'web') {
+      list = list.filter((l) => l.job_type === 'web' || isItemWeb(l));
+    } else if (platformScope === 'app') {
+      list = list.filter((l) => l.job_type === 'app' || (!isItemWeb(l) && l.job_type !== 'web'));
+    }
+    if (selectedFilter !== 'all') {
+      list = list.filter(
+        (l) =>
+          String(l.job_id) === String(selectedFilter) ||
+          String(l.app_identifier) === String(selectedFilter) ||
+          String(l.user_id) === String(selectedFilter)
+      );
+    }
+    return list;
   }, [logs, selectedFilter, platformScope]);
 
   const scopedCrashes = useMemo(() => {
-    if (selectedFilter !== 'all') return crashes;
-    if (platformScope === 'web') return crashes.filter((c) => c.job_type === 'web' || isItemWeb(c));
-    if (platformScope === 'app') return crashes.filter((c) => c.job_type === 'app' || (!isItemWeb(c) && c.job_type !== 'web'));
-    return crashes;
+    let list = crashes;
+    if (platformScope === 'web') {
+      list = list.filter((c) => c.job_type === 'web' || isItemWeb(c));
+    } else if (platformScope === 'app') {
+      list = list.filter((c) => c.job_type === 'app' || (!isItemWeb(c) && c.job_type !== 'web'));
+    }
+    if (selectedFilter !== 'all') {
+      list = list.filter(
+        (c) =>
+          String(c.job_id) === String(selectedFilter) ||
+          String(c.app_identifier) === String(selectedFilter)
+      );
+    }
+    return list;
   }, [crashes, selectedFilter, platformScope]);
 
   const scopedEvents = useMemo(() => {
-    if (selectedFilter !== 'all') return events;
-    if (platformScope === 'web') return events.filter((e) => e.job_type === 'web' || isItemWeb(e));
-    if (platformScope === 'app') return events.filter((e) => e.job_type === 'app' || (!isItemWeb(e) && e.job_type !== 'web'));
-    return events;
+    let list = events;
+    if (platformScope === 'web') {
+      list = list.filter((e) => e.job_type === 'web' || isItemWeb(e));
+    } else if (platformScope === 'app') {
+      list = list.filter((e) => e.job_type === 'app' || (!isItemWeb(e) && e.job_type !== 'web'));
+    }
+    if (selectedFilter !== 'all') {
+      list = list.filter(
+        (e) =>
+          String(e.job_id) === String(selectedFilter) ||
+          String(e.app_identifier) === String(selectedFilter) ||
+          String(e.user_id) === String(selectedFilter)
+      );
+    }
+    return list;
   }, [events, selectedFilter, platformScope]);
 
   // Status counters for Logs
@@ -1653,7 +1703,7 @@ export const appConfig: ApplicationConfig = {
           <div className="metric-item metric-lead">
             <span>Tổng số cuộc gọi</span>
             <strong>{totalCalls}</strong>
-            <small>{selectedFilter === 'all' ? 'Toàn bộ hệ thống' : `Cho ${activeUserJob?.name}`}</small>
+            <small>{selectedFilter === 'all' ? (platformScope === 'web' ? 'Toàn bộ Web App' : 'Toàn bộ Mobile App') : `Cho ${activeUserJob?.name}`}</small>
           </div>
           <div className="metric-item">
             <span>200 OK (Thành công)</span>
@@ -1683,10 +1733,10 @@ export const appConfig: ApplicationConfig = {
           <div className="metric-item metric-lead">
             <span>Tổng sự cố ghi nhận</span>
             <strong>{totalCrashes}</strong>
-            <small>{selectedFilter === 'all' ? 'Toàn bộ hệ thống' : `Cho ${activeUserJob?.name}`}</small>
+            <small>{selectedFilter === 'all' ? (platformScope === 'web' ? 'Toàn bộ Web App' : 'Toàn bộ Mobile App') : `Cho ${activeUserJob?.name}`}</small>
           </div>
           <div className="metric-item">
-            <span>Fatal Crashes (Sập App)</span>
+            <span>{platformScope === 'web' ? 'Fatal Errors (Sập trang/Runtime)' : 'Fatal Crashes (Sập App)'}</span>
             <strong style={{ color: fatalCrashes > 0 ? '#ff7785' : 'var(--success)' }}>
               {fatalCrashes}
             </strong>
@@ -1700,14 +1750,14 @@ export const appConfig: ApplicationConfig = {
             <small>{nonFatalCrashes > 0 ? 'Ngoại lệ đã bắt try/catch' : 'Hoàn hảo'}</small>
           </div>
           <div className="metric-item">
-            <span>Trạng thái App</span>
+            <span>{platformScope === 'web' ? 'Trạng thái Web App' : 'Trạng thái App'}</span>
             <strong className={fatalCrashes === 0 ? 'metric-success' : 'metric-error'}>
               {fatalCrashes === 0 ? '100% Ổn định' : 'Có lỗi nghiêm trọng'}
             </strong>
             <small>Độ tin cậy ứng dụng</small>
           </div>
           <div className="metric-item">
-            <span>Số App / Thiết bị ảnh hưởng</span>
+            <span>{platformScope === 'web' ? 'Số Trình duyệt ảnh hưởng' : 'Số Thiết bị ảnh hưởng'}</span>
             <strong>{affectedAppsCount}</strong>
             <small>Mã định danh báo cáo</small>
           </div>
@@ -1719,12 +1769,12 @@ export const appConfig: ApplicationConfig = {
           <div className="metric-item metric-lead">
             <span>Tổng lượt sự kiện</span>
             <strong>{totalEvents}</strong>
-            <small>{selectedFilter === 'all' ? 'Toàn bộ hệ thống' : `Cho ${activeUserJob?.name}`}</small>
+            <small>{selectedFilter === 'all' ? (platformScope === 'web' ? 'Toàn bộ Web App' : 'Toàn bộ Mobile App') : `Cho ${activeUserJob?.name}`}</small>
           </div>
           <div className="metric-item">
-            <span>Lượt xem màn hình (Screens)</span>
+            <span>{platformScope === 'web' ? 'Lượt xem trang (Page Views)' : 'Lượt xem màn hình (Screens)'}</span>
             <strong style={{ color: '#61e5bd' }}>{screenViewCount}</strong>
-            <small>Chuyển trang & màn hình</small>
+            <small>{platformScope === 'web' ? 'Chuyển route & page' : 'Chuyển trang & màn hình'}</small>
           </div>
           <div className="metric-item">
             <span>Sự kiện tương tác (Custom)</span>

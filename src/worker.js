@@ -1448,11 +1448,29 @@ async function loadDimensions(db, force = false) {
 // mỗi lần mở dashboard.
 const FILTER_TTL_MS = 300000;
 const FILTER_SCAN_ROWS = 1000;
-let filterCache = { at: 0, value: null };
+const filterCacheMap = new Map();
 
 const invalidateDimensions = () => {
   dimensionCache = { at: 0, jobs: [], users: [] };
-  filterCache = { at: 0, value: null };
+  filterCacheMap.clear();
+};
+
+const isBrowserDevice = (dev) => {
+  if (!dev) return false;
+  const s = String(dev).toLowerCase();
+  return (
+    s.includes('chrome') ||
+    s.includes('safari') ||
+    s.includes('firefox') ||
+    s.includes('edge') ||
+    s.includes('browser') ||
+    s.includes('trình duyệt') ||
+    s.includes('windows') ||
+    s.includes('macos') ||
+    s.includes('linux') ||
+    s.includes('opera') ||
+    s.includes('web')
+  );
 };
 
 // Ghép tên job / chủ sở hữu vào từng dòng telemetry — việc mà JOIN vẫn làm trước đây.
@@ -1483,39 +1501,70 @@ const decorateRows = (rows, dims) => {
 
 /**
  * Chuyển bộ lọc của dashboard thành MỘT điều kiện dùng được index.
- *
- * Dashboard lọc theo chủ sở hữu (user_id), theo job, hoặc theo app_identifier.
- * Cả ba đều quy được về danh sách app_identifier / job_id nhờ bảng jobs đã nằm
- * sẵn trong bộ nhớ, nên câu SQL chỉ cần một mệnh đề trên một cột đã đánh index.
+ * Hỗ trợ phân quyền phân hệ platform ('web' hoặc 'app').
  */
-const buildScopeClause = (dims, { userId, jobId, appIdentifier }, columnPrefix = '') => {
-  if (!userId && !jobId && !appIdentifier) return { clause: '', params: [] };
-
+const buildScopeClause = (dims, { userId, jobId, appIdentifier, platform }, columnPrefix = '') => {
   let jobs = dims.jobs;
+
+  // Lọc theo nền tảng nếu có
+  if (platform === 'web') {
+    jobs = jobs.filter((job) => job.type === 'web');
+  } else if (platform === 'app') {
+    jobs = jobs.filter((job) => job.type === 'app' || !job.type);
+  }
+
   if (jobId) jobs = jobs.filter((job) => String(job.id) === String(jobId));
   if (userId) jobs = jobs.filter((job) => String(job.user_id) === String(userId));
   if (appIdentifier) jobs = jobs.filter((job) => job.app_identifier === appIdentifier);
 
   const appIds = Array.from(new Set(jobs.map((job) => job.app_identifier).filter(Boolean)));
-  // App gửi telemetry nhưng chưa đăng ký job thì vẫn lọc được theo chính app_identifier
   if (!appIds.length && appIdentifier) appIds.push(appIdentifier);
 
-  if (appIds.length) {
+  // Nếu người dùng chọn đích danh userId, jobId, hoặc appIdentifier
+  if (userId || jobId || appIdentifier) {
+    if (appIds.length) {
+      return {
+        clause: ` AND ${columnPrefix}app_identifier IN (${appIds.map(() => '?').join(', ')})`,
+        params: appIds,
+      };
+    }
+    const jobIds = jobs.map((job) => job.id);
+    if (jobIds.length) {
+      return {
+        clause: ` AND ${columnPrefix}job_id IN (${jobIds.map(() => '?').join(', ')})`,
+        params: jobIds,
+      };
+    }
+    return { clause: ' AND 1 = 0', params: [] };
+  }
+
+  // Nếu người dùng chọn 'all' nhưng có chỉ định platform
+  if (platform === 'web') {
+    const webJobs = dims.jobs.filter((j) => j.type === 'web');
+    const webAppIds = webJobs.map((j) => j.app_identifier).filter(Boolean);
+    webAppIds.push('vn.myportal.web');
+    const uniqueWebAppIds = Array.from(new Set(webAppIds));
+
     return {
-      clause: ` AND ${columnPrefix}app_identifier IN (${appIds.map(() => '?').join(', ')})`,
-      params: appIds,
+      clause: ` AND (${columnPrefix}app_identifier IN (${uniqueWebAppIds.map(() => '?').join(', ')}) OR ${columnPrefix}app_identifier LIKE '%web%' OR ${columnPrefix}device_name LIKE '%Web%' OR ${columnPrefix}device_name LIKE '%Chrome%' OR ${columnPrefix}device_name LIKE '%Firefox%' OR ${columnPrefix}device_name LIKE '%Safari%' OR ${columnPrefix}device_name LIKE '%Edge%')`,
+      params: uniqueWebAppIds,
     };
   }
 
-  const jobIds = jobs.map((job) => job.id);
-  if (jobIds.length) {
+  if (platform === 'app') {
+    const webJobs = dims.jobs.filter((j) => j.type === 'web');
+    const webAppIds = webJobs.map((j) => j.app_identifier).filter(Boolean);
+    webAppIds.push('vn.myportal.web');
+    const uniqueWebAppIds = Array.from(new Set(webAppIds));
+
     return {
-      clause: ` AND ${columnPrefix}job_id IN (${jobIds.map(() => '?').join(', ')})`,
-      params: jobIds,
+      clause: ` AND (${columnPrefix}app_identifier NOT IN (${uniqueWebAppIds.map(() => '?').join(', ')}) OR ${columnPrefix}app_identifier IS NULL) AND (${columnPrefix}app_identifier NOT LIKE '%web%' OR ${columnPrefix}app_identifier IS NULL) AND (${columnPrefix}device_name IS NULL OR (${columnPrefix}device_name NOT LIKE '%Chrome%' AND ${columnPrefix}device_name NOT LIKE '%Firefox%' AND ${columnPrefix}device_name NOT LIKE '%Safari%' AND ${columnPrefix}device_name NOT LIKE '%Edge%' AND ${columnPrefix}device_name NOT LIKE '%Web Browser%'))`,
+      params: uniqueWebAppIds,
     };
   }
 
-  // Bộ lọc không khớp job nào: trả về rỗng thay vì lặng lẽ bỏ qua bộ lọc
+  if (!userId && !jobId && !appIdentifier && !platform) return { clause: '', params: [] };
+
   return { clause: ' AND 1 = 0', params: [] };
 };
 
@@ -1559,8 +1608,11 @@ export default {
     // ==========================================
     if (path === '/telemetry/filters' && request.method === 'GET') {
       try {
-        if (filterCache.at && Date.now() - filterCache.at < FILTER_TTL_MS) {
-          return jsonResponse(filterCache.value);
+        const platform = (url.searchParams.get('platform') || '').trim().toLowerCase();
+        const cacheKey = platform || 'all';
+        const cached = filterCacheMap.get(cacheKey);
+        if (cached && Date.now() - cached.at < FILTER_TTL_MS) {
+          return jsonResponse(cached.value);
         }
 
         const dims = await loadDimensions(env.DB);
@@ -1580,10 +1632,6 @@ export default {
           });
         });
 
-        // Trước đây chỗ này chạy 9 câu SELECT DISTINCT không có index -> 9 lần quét
-        // toàn bảng mỗi lần gọi. Giờ chỉ đọc N dòng gần nhất theo index created_at
-        // rồi lọc trùng bằng JS: thiết bị và người dùng đang hoạt động chắc chắn
-        // nằm trong cửa sổ này, mà chi phí thì cố định thay vì tăng theo kích thước bảng.
         const [recentLogs, recentEvents, recentCrashes] = await Promise.all([
           env.DB.prepare(
             'SELECT app_identifier, device_name, user_name FROM api_logs ORDER BY created_at DESC LIMIT ?'
@@ -1603,7 +1651,7 @@ export default {
           if (!raw) return;
           const parsed = safeJsonParse(raw, null);
           if (parsed && typeof parsed === 'object') {
-            const device = parsed.device_name || parsed.model || parsed.name || parsed.device || parsed.os;
+            const device = parsed.device_name || parsed.model || parsed.name || parsed.device || parsed.os || parsed.browser;
             if (device) {
               deviceSet.add(String(device).trim());
               return;
@@ -1626,13 +1674,14 @@ export default {
           else if (row.user_id) userSet.add(String(row.user_id).trim());
 
           if (row.app_identifier && !appsMap.has(row.app_identifier)) {
+            const isWeb = row.app_identifier.includes('web') || row.app_identifier.includes('portal');
             appsMap.set(row.app_identifier, {
               id: row.app_identifier,
               filterValue: row.app_identifier,
               job_name: row.app_identifier,
               app_identifier: row.app_identifier,
-              job_type: 'app',
-              user_name: 'Telemetry App',
+              job_type: isWeb ? 'web' : 'app',
+              user_name: isWeb ? 'Web Client' : 'Telemetry App',
             });
           }
         });
@@ -1641,12 +1690,34 @@ export default {
           if (user.name) userSet.add(String(user.name).trim());
         });
 
+        let allApps = Array.from(appsMap.values());
+        let allDevices = Array.from(deviceSet).filter(Boolean);
+        let allUsers = Array.from(userSet).filter(Boolean);
+
+        if (platform === 'web') {
+          allApps = allApps.filter((a) => a.job_type === 'web');
+          allDevices = allDevices.filter((d) => isBrowserDevice(d));
+          if (!allDevices.length) {
+            allDevices = ['Chrome Web', 'Firefox Web', 'Safari Web', 'Edge Web'];
+          }
+          const webUserCandidates = allUsers.filter(
+            (u) => u.toLowerCase().includes('web') || u.toLowerCase().includes('admin') || u.toLowerCase().includes('dev')
+          );
+          allUsers = webUserCandidates.length ? webUserCandidates : ['web-dev', 'Web Developer'];
+        } else if (platform === 'app') {
+          allApps = allApps.filter((a) => a.job_type === 'app' || !a.job_type);
+          allDevices = allDevices.filter((d) => !isBrowserDevice(d));
+          allUsers = allUsers.filter(
+            (u) => !u.toLowerCase().includes('web-dev') && !u.toLowerCase().includes('web developer')
+          );
+        }
+
         const value = {
-          apps: Array.from(appsMap.values()),
-          devices: Array.from(deviceSet).filter(Boolean).sort(),
-          users: Array.from(userSet).filter(Boolean).sort(),
+          apps: allApps,
+          devices: allDevices.sort(),
+          users: allUsers.sort(),
         };
-        filterCache = { at: Date.now(), value };
+        filterCacheMap.set(cacheKey, { at: Date.now(), value });
         return jsonResponse(value, 200, 'public, max-age=30, stale-while-revalidate=60');
       } catch (e) {
         return readErrorResponse(e, { apps: [], devices: [], users: [] }, env.DB);
@@ -1852,6 +1923,7 @@ export default {
           userId: url.searchParams.get('user_id'),
           jobId: url.searchParams.get('job_id'),
           appIdentifier: url.searchParams.get('app_identifier') || url.searchParams.get('app_id'),
+          platform: url.searchParams.get('platform') || url.searchParams.get('job_type'),
         });
         query += scope.clause;
         params.push(...scope.params);
@@ -2071,6 +2143,7 @@ export default {
           userId: url.searchParams.get('user_id'),
           jobId: url.searchParams.get('job_id'),
           appIdentifier: url.searchParams.get('app_identifier') || url.searchParams.get('app_id'),
+          platform: url.searchParams.get('platform') || url.searchParams.get('job_type'),
         });
         query += scope.clause;
         params.push(...scope.params);
@@ -2245,6 +2318,7 @@ export default {
           userId: url.searchParams.get('user_id'),
           jobId: url.searchParams.get('job_id'),
           appIdentifier: url.searchParams.get('app_identifier') || url.searchParams.get('app_id'),
+          platform: url.searchParams.get('platform') || url.searchParams.get('job_type'),
         });
         query += scope.clause;
         params.push(...scope.params);
@@ -2415,9 +2489,15 @@ export default {
     // ==========================================
     if (path === '/funnels' && request.method === 'GET') {
       try {
-        const { results } = await env.DB.prepare(
-          'SELECT * FROM event_funnels ORDER BY status ASC, name ASC'
-        ).all();
+        const platform = (url.searchParams.get('platform') || '').trim().toLowerCase();
+        let query = 'SELECT * FROM event_funnels WHERE 1=1';
+        if (platform === 'web') {
+          query += " AND (app_identifier LIKE '%web%' OR app_identifier = 'vn.myportal.web')";
+        } else if (platform === 'app') {
+          query += " AND (app_identifier NOT LIKE '%web%' AND (app_identifier != 'vn.myportal.web' OR app_identifier IS NULL))";
+        }
+        query += ' ORDER BY status ASC, name ASC';
+        const { results } = await env.DB.prepare(query).all();
         return jsonResponse((results || []).map(mapFunnelRow));
       } catch (e) {
         return jsonResponse({ error: e.message }, 500);
@@ -3140,12 +3220,17 @@ export default {
           params.push(type);
         }
 
+        const platform = (urlParams.get('platform') || '').trim().toLowerCase();
         if (appIdentifier) {
           whereClause += ' AND app_identifier = ?';
           params.push(appIdentifier);
         } else if (jobId) {
           whereClause += ' AND job_id = ?';
           params.push(Number(jobId));
+        } else if (platform === 'web') {
+          whereClause += " AND (app_identifier LIKE '%web%' OR app_identifier = 'vn.myportal.web')";
+        } else if (platform === 'app') {
+          whereClause += " AND (app_identifier NOT LIKE '%web%' AND (app_identifier != 'vn.myportal.web' OR app_identifier IS NULL))";
         }
 
         const allowedSorts = ['last_seen', 'total_occurrences', 'created_at', 'first_seen'];
