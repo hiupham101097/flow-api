@@ -2,9 +2,11 @@ import React from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import '../styles/global.css';
 import { usePlatform } from '../context/PlatformContext';
+import { useAuth } from '../context/AuthContext';
 
 function AdminLayout() {
   const { platformScope, openPlatformModal } = usePlatform();
+  const { user, logout } = useAuth();
 
   return (
     <div className="dashboard-shell">
@@ -70,11 +72,53 @@ function AdminLayout() {
             }}
             title="Bấm để đổi chế độ xem giữa Web App và Mobile App"
           >
-            <span>{platformScope === 'web' ? '🌐 Quản lý: Web App' : '📱 Quản lý: Mobile App'}</span>
+            <span>{platformScope === 'web' ? '🌐 Phân hệ: Web' : '📱 Phân hệ: App'}</span>
             <span style={{ fontSize: '0.72rem', opacity: 0.8, marginLeft: '0.2rem', padding: '0.1rem 0.4rem', borderRadius: '10px', background: 'rgba(255,255,255,0.08)' }}>
               ⇄ Đổi
             </span>
           </button>
+
+          {/* Thông tin tài khoản đăng nhập & Nút Đăng xuất */}
+          {user && (
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.55rem',
+                background: 'var(--surface-muted)',
+                padding: '0.32rem 0.75rem',
+                borderRadius: '16px',
+                border: '1px solid var(--line)',
+              }}
+            >
+              <span style={{ fontSize: '0.9rem' }}>{user.role === 'web' ? '🌐' : '📱'}</span>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <strong style={{ fontSize: '0.78rem', color: 'var(--text)', lineHeight: 1.1 }}>{user.username}</strong>
+                <span style={{ fontSize: '0.64rem', color: user.role === 'web' ? '#67e8f9' : '#c4b5fd', fontWeight: 500 }}>
+                  {user.role === 'web' ? 'Web Role' : 'App Role'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={logout}
+                style={{
+                  background: 'rgba(255, 119, 133, 0.12)',
+                  border: '1px solid rgba(255, 119, 133, 0.3)',
+                  color: '#ff7785',
+                  cursor: 'pointer',
+                  fontSize: '0.74rem',
+                  fontWeight: 600,
+                  padding: '0.22rem 0.55rem',
+                  borderRadius: '8px',
+                  marginLeft: '0.35rem',
+                  transition: 'all 0.15s ease',
+                }}
+                title="Đăng xuất khỏi hệ thống"
+              >
+                Đăng xuất
+              </button>
+            </div>
+          )}
 
           <span className="live-indicator"><span aria-hidden="true" /> Cloudflare D1 · Active</span>
         </div>
