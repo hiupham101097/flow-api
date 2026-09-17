@@ -481,6 +481,8 @@ function Dashboard() {
         const data = await response.json();
         if (data && data.quota_exceeded) {
           setQuotaExceeded(true);
+        } else {
+          setQuotaExceeded(false);
         }
         if (data && typeof data === 'object') {
           setFilterMeta({
@@ -491,7 +493,7 @@ function Dashboard() {
         }
       } else {
         const errText = await response.text().catch(() => '');
-        if (errText.includes('daily row read limit') || errText.includes('exceeded D1') || errText.includes('D1_ERROR')) {
+        if (errText.includes('daily row read limit') || errText.includes('exceeded D1') || errText.includes('quota')) {
           setQuotaExceeded(true);
         }
       }
@@ -581,13 +583,18 @@ function Dashboard() {
           if (
             text.includes('daily row read limit') ||
             text.includes('exceeded D1') ||
-            text.includes('D1_ERROR')
+            text.includes('quota')
           ) {
             setQuotaExceeded(true);
           }
           return;
         }
         const data = await response.json();
+        if (data && data.quota_exceeded) {
+          setQuotaExceeded(true);
+          return;
+        }
+        setQuotaExceeded(false);
         if (!Array.isArray(data)) return;
         if (incremental && current.length > 0) {
           setter((prev) => mergeIncoming(prev, data, TELEMETRY_CAP));

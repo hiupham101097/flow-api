@@ -13,7 +13,7 @@ not_found_handling = "single-page-application"
 [[d1_databases]]
 binding = "DB"
 database_name = "flow-api"
-database_id = "a0da54db-fb97-4a3c-87ac-e6a3ea214773"
+database_id = "b0c989ce-f835-4d9d-801d-fce0e7da7545"
 
 [triggers]
 crons = ["0 0 * * *"] # Run daily at midnight UTC
