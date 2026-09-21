@@ -1048,6 +1048,8 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
 function detectCrashPlatform(body, request = null) {
   if (!body) return { key: 'mobile', label: 'Mobile App', icon: '📱' };
   const deviceInfo = body.device_info;
