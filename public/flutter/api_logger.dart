@@ -341,6 +341,34 @@ class AppTelemetry {
     return 'Mobile Device';
   }
 
+  /// Lấy tên hệ điều hành (Android / iOS / macOS / Windows / Linux)
+  static String get osName {
+    try {
+      if (Platform.isAndroid) return 'Android';
+      if (Platform.isIOS) return 'iOS';
+      if (Platform.isWindows) return 'Windows';
+      if (Platform.isMacOS) return 'macOS';
+      if (Platform.isLinux) return 'Linux';
+      return Platform.operatingSystem;
+    } catch (_) {
+      return 'Mobile';
+    }
+  }
+
+  /// Lấy mã nền tảng (android / ios / windows...)
+  static String get platformId {
+    try {
+      if (Platform.isAndroid) return 'android';
+      if (Platform.isIOS) return 'ios';
+      if (Platform.isWindows) return 'windows';
+      if (Platform.isMacOS) return 'macos';
+      if (Platform.isLinux) return 'linux';
+      return Platform.operatingSystem.toLowerCase();
+    } catch (_) {
+      return 'mobile';
+    }
+  }
+
   /// Ghi nhận sự cố Crashlytics (Fatal Crash hoặc Non-fatal Exception)
   static void recordCrash({
     required dynamic exception,
@@ -357,6 +385,12 @@ class AppTelemetry {
     final effectiveDevice = deviceName ?? AppTelemetry.deviceName;
 
     final Map<String, dynamic> mergedDeviceInfo = Map.from(deviceInfo ?? {});
+    if (!mergedDeviceInfo.containsKey('os')) {
+      mergedDeviceInfo['os'] = osName;
+    }
+    if (!mergedDeviceInfo.containsKey('platform')) {
+      mergedDeviceInfo['platform'] = platformId;
+    }
     if (!mergedDeviceInfo.containsKey('device_name')) {
       mergedDeviceInfo['device_name'] = effectiveDevice;
     }
@@ -367,6 +401,8 @@ class AppTelemetry {
       'stack_trace': stack?.toString(),
       'is_fatal': isFatal,
       'device_info': mergedDeviceInfo,
+      'os': osName,
+      'platform': platformId,
       'custom_attributes': customAttributes,
     };
 

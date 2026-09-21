@@ -102,7 +102,11 @@ class AppTelemetry {
     Map<String, dynamic>? deviceInfo,
   }) async {
     try {
+      final osName = Platform.isAndroid ? 'Android' : (Platform.isIOS ? 'iOS' : Platform.operatingSystem);
       final mergedDevice = Map<String, dynamic>.from(deviceInfo ?? {});
+      if (!mergedDevice.containsKey('os')) {
+        mergedDevice['os'] = osName;
+      }
       if (!mergedDevice.containsKey('device_name')) {
         mergedDevice['device_name'] = deviceName;
       }
@@ -113,6 +117,7 @@ class AppTelemetry {
         'stack_trace': stack?.toString() ?? '',
         'is_fatal': isFatal ? 1 : 0,
         'device_info': mergedDevice,
+        'os': osName,
         'user_name': userName,
       };
 

@@ -43,20 +43,29 @@ export function exportToCsv(type, data) {
       'ID',
       'Thời gian',
       'App',
+      'Hệ điều hành (OS)',
       'Mức độ nghiêm trọng',
       'Ngoại lệ (Error Message)',
       'Thông tin thiết bị',
       'Stack Trace',
     ];
-    rows = data.map((c) => [
-      c.id,
-      c.created_at,
-      c.app_identifier || '',
-      Number(c.is_fatal) === 1 ? 'Fatal Crash (Sập app)' : 'Non-fatal Exception',
-      (c.error_message || '').replace(/"/g, '""'),
-      (c.device_info || '').replace(/"/g, '""'),
-      (c.stack_trace || '').replace(/"/g, '""'),
-    ]);
+    rows = data.map((c) => {
+      let os = 'Chưa xác định';
+      const raw = `${c.device_info || ''} ${c.stack_trace || ''} ${c.error_message || ''}`.toLowerCase();
+      if (/android|\.apk|\/data\/user|dalvik|art|\.kt|\.java/i.test(raw)) os = 'Android';
+      else if (/ios|iphone|ipad|runner\.app|\/var\/mobile|\.swift|\.m:/i.test(raw)) os = 'iOS';
+
+      return [
+        c.id,
+        c.created_at,
+        c.app_identifier || '',
+        os,
+        Number(c.is_fatal) === 1 ? 'Fatal Crash (Sập app)' : 'Non-fatal Exception',
+        (c.error_message || '').replace(/"/g, '""'),
+        (c.device_info || '').replace(/"/g, '""'),
+        (c.stack_trace || '').replace(/"/g, '""'),
+      ];
+    });
   } else if (type === 'events') {
     headers = [
       'ID',

@@ -56,6 +56,38 @@ function isDeviceWeb(deviceName) {
   );
 }
 
+// Nhận diện chính xác nền tảng (Android / iOS / Web) của Crash Record
+export function getCrashPlatform(crash) {
+  if (!crash) return { key: 'unknown', name: 'Không rõ', icon: '📱', badgeClass: 'device-chip', label: '📱 Mobile' };
+  let raw = '';
+  if (crash.device_info) {
+    if (typeof crash.device_info === 'object') {
+      const p = String(crash.device_info.platform || '').toLowerCase();
+      const o = String(crash.device_info.os || '').toLowerCase();
+      if (p.includes('ios') || p.includes('apple') || p.includes('iphone') || o.includes('ios') || o.includes('apple') || o.includes('iphone')) {
+        return { key: 'ios', name: 'iOS', icon: '🍎', badgeClass: 'badge-ios', label: '🍎 iOS' };
+      }
+      if (p.includes('android') || o.includes('android')) {
+        return { key: 'android', name: 'Android', icon: '🤖', badgeClass: 'badge-android', label: '🤖 Android' };
+      }
+      raw = JSON.stringify(crash.device_info);
+    } else {
+      raw = String(crash.device_info);
+    }
+  }
+  const combined = `${crash.device_name || ''} ${raw} ${crash.error_message || ''} ${crash.stack_trace || ''}`.toLowerCase();
+  if (/iphone|ipad|ipod|ios|apple|runner\.app|\/var\/mobile|\.swift:\d+|\.m:\d+/i.test(combined)) {
+    return { key: 'ios', name: 'iOS', icon: '🍎', badgeClass: 'badge-ios', label: '🍎 iOS' };
+  }
+  if (/android|\.apk|\/data\/user|dalvik|art|samsung|pixel|xiaomi|oppo|vivo|realme|redmi|huawei|oneplus|\.java:\d+|\.kt:\d+/i.test(combined)) {
+    return { key: 'android', name: 'Android', icon: '🤖', badgeClass: 'badge-android', label: '🤖 Android' };
+  }
+  if (/web|chrome|firefox|safari|edge|browser/i.test(combined)) {
+    return { key: 'web', name: 'Web', icon: '🌐', badgeClass: 'badge-web', label: '🌐 Web' };
+  }
+  return { key: 'mobile', name: 'Mobile', icon: '📱', badgeClass: 'device-chip', label: '📱 Mobile' };
+}
+
 // Màu của từng nhóm kết quả, dùng chung cho cột chồng, chú giải và biểu đồ ngày
 const OUTCOME_COLORS = {
   success_auto: 'var(--success)',
@@ -1272,6 +1304,8 @@ export const appConfig: ApplicationConfig = {
   const totalCrashes = scopedCrashes.length;
   const fatalCrashes = scopedCrashes.filter((c) => Number(c.is_fatal) === 1).length;
   const nonFatalCrashes = scopedCrashes.filter((c) => Number(c.is_fatal) !== 1).length;
+  const androidCrashes = scopedCrashes.filter((c) => getCrashPlatform(c).key === 'android').length;
+  const iosCrashes = scopedCrashes.filter((c) => getCrashPlatform(c).key === 'ios').length;
   const affectedAppsCount = new Set(scopedCrashes.map((c) => c.app_identifier).filter(Boolean)).size;
 
   // Status counters for Analytics
@@ -1393,8 +1427,11 @@ export const appConfig: ApplicationConfig = {
   // Filter and search Crashes
   const filteredCrashes = useMemo(() => {
     return scopedCrashes.filter((crash) => {
+      const osPlatform = getCrashPlatform(crash);
       if (crashTab === 'fatal' && Number(crash.is_fatal) !== 1) return false;
       if (crashTab === 'non-fatal' && Number(crash.is_fatal) === 1) return false;
+      if (crashTab === 'android' && osPlatform.key !== 'android') return false;
+      if (crashTab === 'ios' && osPlatform.key !== 'ios') return false;
 
       if (deviceFilter !== 'all') {
         const dLower = deviceFilter.toLowerCase();
@@ -1410,8 +1447,9 @@ export const appConfig: ApplicationConfig = {
       const userMatch = toSearchText(crash.user_name).includes(lower);
       const jobMatch = toSearchText(crash.job_name).includes(lower);
       const deviceMatch = toSearchText(crash.device_info).includes(lower);
+      const osMatch = toSearchText(osPlatform.name).includes(lower) || toSearchText(osPlatform.label).includes(lower);
 
-      return msgMatch || stackMatch || appMatch || userMatch || jobMatch || deviceMatch;
+      return msgMatch || stackMatch || appMatch || userMatch || jobMatch || deviceMatch || osMatch;
     });
   }, [scopedCrashes, crashTab, searchTerm, deviceFilter, userFilter]);
 
@@ -1758,6 +1796,20 @@ export const appConfig: ApplicationConfig = {
               {nonFatalCrashes}
             </strong>
             <small>{nonFatalCrashes > 0 ? 'Ngoại lệ đã bắt try/catch' : 'Hoàn hảo'}</small>
+          </div>
+          <div className="metric-item">
+            <span>🤖 Android</span>
+            <strong style={{ color: androidCrashes > 0 ? '#4ade80' : 'inherit' }}>
+              {androidCrashes}
+            </strong>
+            <small>{androidCrashes > 0 ? 'Sự cố trên Android' : '0 sự cố'}</small>
+          </div>
+          <div className="metric-item">
+            <span>🍎 iOS</span>
+            <strong style={{ color: iosCrashes > 0 ? '#38bdf8' : 'inherit' }}>
+              {iosCrashes}
+            </strong>
+            <small>{iosCrashes > 0 ? 'Sự cố trên iOS' : '0 sự cố'}</small>
           </div>
           <div className="metric-item">
             <span>{platformScope === 'web' ? 'Trạng thái Web App' : 'Trạng thái App'}</span>
@@ -2408,7 +2460,7 @@ export const appConfig: ApplicationConfig = {
             </div>
 
             <div className="log-controls">
-              <div className="filter-tabs" role="tablist" aria-label="Lọc mức độ crash">
+              <div className="filter-tabs" role="tablist" aria-label="Lọc mức độ và nền tảng crash">
                 <button
                   type="button"
                   role="tab"
@@ -2417,6 +2469,28 @@ export const appConfig: ApplicationConfig = {
                   onClick={() => setCrashTab('all')}
                 >
                   Tất cả <span className="tab-count">{totalCrashes}</span>
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={crashTab === 'android'}
+                  className={`filter-tab ${crashTab === 'android' ? 'active' : ''}`}
+                  style={{ color: crashTab === 'android' ? '#4ade80' : undefined }}
+                  onClick={() => setCrashTab('android')}
+                  title="Chỉ lọc sự cố trên hệ điều hành Android"
+                >
+                  🤖 Android <span className="tab-count">{androidCrashes}</span>
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={crashTab === 'ios'}
+                  className={`filter-tab ${crashTab === 'ios' ? 'active' : ''}`}
+                  style={{ color: crashTab === 'ios' ? '#38bdf8' : undefined }}
+                  onClick={() => setCrashTab('ios')}
+                  title="Chỉ lọc sự cố trên hệ điều hành iOS"
+                >
+                  🍎 iOS <span className="tab-count">{iosCrashes}</span>
                 </button>
                 <button
                   type="button"
@@ -2568,15 +2642,24 @@ export const appConfig: ApplicationConfig = {
                         {crash.error_message}
                       </td>
                       <td>
-                        {deviceInfoParsed && typeof deviceInfoParsed === 'object' ? (
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
-                            {deviceInfoParsed.os && <span className="device-chip">{deviceInfoParsed.os}</span>}
-                            {deviceInfoParsed.model && <span className="device-chip">{deviceInfoParsed.model}</span>}
-                            {deviceInfoParsed.app && <span className="device-chip">{deviceInfoParsed.app}</span>}
-                          </div>
-                        ) : (
-                          <span className="device-chip">📱 Mobile</span>
-                        )}
+                        {(() => {
+                          const osInfo = getCrashPlatform(crash);
+                          return (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', alignItems: 'center' }}>
+                                <span className={osInfo.badgeClass}>{osInfo.label}</span>
+                                {deviceInfoParsed && typeof deviceInfoParsed === 'object' && (deviceInfoParsed.model || deviceInfoParsed.device_name) && (
+                                  <span className="device-chip">{deviceInfoParsed.model || deviceInfoParsed.device_name}</span>
+                                )}
+                              </div>
+                              {deviceInfoParsed && typeof deviceInfoParsed === 'object' && deviceInfoParsed.os_version && (
+                                <small style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>
+                                  OS v{deviceInfoParsed.os_version}
+                                </small>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="action-cell" style={{ display: 'flex', gap: '0.35rem', justifyContent: 'flex-end' }}>
                         <button
@@ -3423,6 +3506,14 @@ export const appConfig: ApplicationConfig = {
             <div className="modal-body">
               {/* Target & App info */}
               <div className="modal-meta-grid" style={{ marginBottom: '1.2rem' }}>
+                <div>
+                  <span className="meta-label">Hệ điều hành</span>
+                  <strong className="meta-value" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <span className={getCrashPlatform(selectedCrash).badgeClass} style={{ fontSize: '0.78rem' }}>
+                      {getCrashPlatform(selectedCrash).label}
+                    </span>
+                  </strong>
+                </div>
                 <div>
                   <span className="meta-label">Ứng dụng (App ID)</span>
                   <strong className="meta-value"><code>{selectedCrash.app_identifier || 'Không rõ'}</code></strong>

@@ -1048,6 +1048,36 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+function detectCrashPlatform(body, request = null) {
+  if (!body) return { key: 'mobile', label: 'Mobile App', icon: '📱' };
+  const deviceInfo = body.device_info;
+  let raw = '';
+  if (deviceInfo) {
+    if (typeof deviceInfo === 'object') {
+      const p = String(deviceInfo.platform || '').toLowerCase();
+      if (p.includes('ios') || p.includes('apple') || p.includes('iphone')) return { key: 'ios', label: 'iOS', icon: '🍎' };
+      if (p.includes('android')) return { key: 'android', label: 'Android', icon: '🤖' };
+      const o = String(deviceInfo.os || '').toLowerCase();
+      if (o.includes('ios') || o.includes('apple') || o.includes('iphone')) return { key: 'ios', label: 'iOS', icon: '🍎' };
+      if (o.includes('android')) return { key: 'android', label: 'Android', icon: '🤖' };
+      raw = JSON.stringify(deviceInfo);
+    } else {
+      raw = String(deviceInfo);
+    }
+  }
+  const ua = request?.headers?.get ? (request.headers.get('user-agent') || '') : '';
+  const combined = `${body.platform || ''} ${body.os || ''} ${raw} ${body.device_name || ''} ${body.device || ''} ${body.error_message || ''} ${body.stack_trace || ''} ${ua}`.toLowerCase();
+
+  if (/iphone|ipad|ipod|ios|apple|runner\.app|\/var\/mobile|\.m:\d+|\.swift:\d+/i.test(combined)) {
+    return { key: 'ios', label: 'iOS', icon: '🍎' };
+  }
+  if (/android|\.apk|\/data\/user|dalvik|art|samsung|pixel|xiaomi|oppo|vivo|realme|redmi|huawei|oneplus|\.java:\d+|\.kt:\d+/i.test(combined)) {
+    return { key: 'android', label: 'Android', icon: '🤖' };
+  }
+  if (/web|chrome|firefox|safari|edge|browser|windows pc|apple mac/i.test(combined)) {
+    return { key: 'web', label: 'Web', icon: '🌐' };
+  }
+  return { key: 'mobile', label: 'Mobile App', icon: '📱' };
 }
 
 async function sendTelegramMessage(token, chatId, text) {
@@ -1186,6 +1216,13 @@ async function triggerTelegramAlert(db, type, payload) {
     if (type === 'fatal_crash') {
       const device = payload.device_name || 'Thiết bị di động';
       const user = payload.user_name || 'Khách';
+      const osLabel = payload.os
+        ? `${payload.os_icon ? `${payload.os_icon} ` : ''}${payload.os}`
+        : (device.toLowerCase().includes('iphone') || device.toLowerCase().includes('ipad')
+            ? '🍎 iOS'
+            : device.toLowerCase().includes('android')
+                ? '🤖 Android'
+                : '📱 Mobile App');
       const errMsg = String(payload.error_message || 'Sự cố không xác định').slice(0, 300);
       const stack = String(payload.stack_trace || '').slice(0, 400);
 
@@ -1193,6 +1230,7 @@ async function triggerTelegramAlert(db, type, payload) {
         `🚨 <b>${envBadge} CẢNH BÁO SẬP APP (FATAL CRASH)</b>`,
         `🏢 <b>Dự án:</b> <b>${escapeHtml(projectName)}</b>`,
         `📱 <b>App ID:</b> <code>${escapeHtml(app)}</code>`,
+        `🖥️ <b>Hệ điều hành:</b> <b>${escapeHtml(osLabel)}</b>`,
         `📟 <b>Thiết bị:</b> ${escapeHtml(device)}`,
         `👤 <b>Người dùng:</b> ${escapeHtml(user)}`,
         `💥 <b>Lỗi:</b> <code>${escapeHtml(errMsg)}</code>`,
@@ -2127,6 +2165,7 @@ export default {
         const afterId = Number(url.searchParams.get('after_id')) || 0;
         const isFatal = url.searchParams.get('is_fatal');
         const deviceParam = url.searchParams.get('device');
+        const osParam = (url.searchParams.get('os') || '').toLowerCase();
 
         let query = `
           SELECT
@@ -2155,6 +2194,11 @@ export default {
         if (deviceParam) {
           query += ' AND device_info LIKE ?';
           params.push(`%${deviceParam}%`);
+        }
+        if (osParam === 'android') {
+          query += " AND (device_info LIKE '%android%' OR device_info LIKE '%Android%' OR device_info LIKE '%\".kt%' OR stack_trace LIKE '%.kt%' OR stack_trace LIKE '%.java%')";
+        } else if (osParam === 'ios') {
+          query += " AND (device_info LIKE '%ios%' OR device_info LIKE '%iOS%' OR device_info LIKE '%iphone%' OR device_info LIKE '%ipad%' OR stack_trace LIKE '%.swift%' OR stack_trace LIKE '%runner.app%')";
         }
 
         if (afterId > 0) {
@@ -2207,6 +2251,41 @@ export default {
           } catch (_) {}
         }
 
+        // Nhận diện nền tảng hệ điều hành (Android vs iOS) chính xác
+        const detectedPlatform = detectCrashPlatform(body, request);
+
+        // Chuẩn hóa và đính kèm OS vào device_info lưu trữ trong DB
+        let enrichedDeviceInfo = device_info;
+        if (typeof enrichedDeviceInfo === 'object' && enrichedDeviceInfo !== null) {
+          enrichedDeviceInfo = {
+            ...enrichedDeviceInfo,
+            os: enrichedDeviceInfo.os || detectedPlatform.label,
+            platform: enrichedDeviceInfo.platform || detectedPlatform.key,
+          };
+        } else if (typeof enrichedDeviceInfo === 'string') {
+          try {
+            const parsed = JSON.parse(enrichedDeviceInfo);
+            if (typeof parsed === 'object' && parsed !== null) {
+              enrichedDeviceInfo = JSON.stringify({
+                ...parsed,
+                os: parsed.os || detectedPlatform.label,
+                platform: parsed.platform || detectedPlatform.key,
+              });
+            }
+          } catch (_) {
+            enrichedDeviceInfo = JSON.stringify({
+              device_name: enrichedDeviceInfo,
+              os: detectedPlatform.label,
+              platform: detectedPlatform.key,
+            });
+          }
+        } else {
+          enrichedDeviceInfo = {
+            os: detectedPlatform.label,
+            platform: detectedPlatform.key,
+          };
+        }
+
         const crashTitle = String(error_message || 'App Crash').split('\n')[0].slice(0, 200);
         let crashCulprit = null;
         if (stack_trace) {
@@ -2223,7 +2302,7 @@ export default {
           title: crashTitle,
           culprit: crashCulprit,
           severity: is_fatal ? 'fatal' : 'error',
-          samplePayload: { error_message, stack_trace, device_info, custom_attributes },
+          samplePayload: { error_message, stack_trace, device_info: enrichedDeviceInfo, custom_attributes },
         });
         const issueId = crashIssue?.id || null;
 
@@ -2240,7 +2319,7 @@ export default {
             String(error_message),
             stack_trace ? String(stack_trace) : null,
             is_fatal ? 1 : 0,
-            formatPayload(device_info),
+            formatPayload(enrichedDeviceInfo),
             formatPayload(custom_attributes),
             issueId,
             crashFingerprint
@@ -2257,7 +2336,7 @@ export default {
             String(error_message),
             stack_trace ? String(stack_trace) : null,
             is_fatal ? 1 : 0,
-            formatPayload(device_info),
+            formatPayload(enrichedDeviceInfo),
             formatPayload(custom_attributes)
           ).run();
         }
@@ -2281,6 +2360,9 @@ export default {
             user_name: crashUser,
             job_id: effectiveJobId,
             issue_id: issueId,
+            os: detectedPlatform.label,
+            os_icon: detectedPlatform.icon,
+            platform: detectedPlatform.key,
           }).catch(() => {});
         }
 
@@ -3116,6 +3198,45 @@ export default {
             cCulprit = lines.find((l) => l.includes('.dart') || l.includes('.js') || l.includes('.ts') || l.includes(':')) || lines[0] || null;
           }
 
+          const cDetected = detectCrashPlatform({
+            ...crash,
+            device_name: crash.device_name || device_name,
+            error_message: crash.error_message,
+            stack_trace: crash.stack_trace,
+            device_info: crash.device_info || device_name,
+          }, request);
+
+          let cDeviceInfo = crash.device_info || device_name;
+          if (typeof cDeviceInfo === 'object' && cDeviceInfo !== null) {
+            cDeviceInfo = {
+              ...cDeviceInfo,
+              os: cDeviceInfo.os || cDetected.label,
+              platform: cDeviceInfo.platform || cDetected.key,
+            };
+          } else if (typeof cDeviceInfo === 'string') {
+            try {
+              const parsed = JSON.parse(cDeviceInfo);
+              if (typeof parsed === 'object' && parsed !== null) {
+                cDeviceInfo = JSON.stringify({
+                  ...parsed,
+                  os: parsed.os || cDetected.label,
+                  platform: parsed.platform || cDetected.key,
+                });
+              }
+            } catch (_) {
+              cDeviceInfo = JSON.stringify({
+                device_name: cDeviceInfo,
+                os: cDetected.label,
+                platform: cDetected.key,
+              });
+            }
+          } else {
+            cDeviceInfo = {
+              os: cDetected.label,
+              platform: cDetected.key,
+            };
+          }
+
           const cFingerprint = await generateIssueFingerprint('crash', cApp, cTitle, cCulprit);
           const cIssue = await upsertIssueRecord(env.DB, {
             fingerprint: cFingerprint,
@@ -3125,7 +3246,7 @@ export default {
             title: cTitle,
             culprit: cCulprit,
             severity: isFatal ? 'fatal' : 'error',
-            samplePayload: { error_message: crash.error_message, stack_trace: crash.stack_trace, device_info: crash.device_info, custom_attributes: crash.custom_attributes },
+            samplePayload: { error_message: crash.error_message, stack_trace: crash.stack_trace, device_info: cDeviceInfo, custom_attributes: crash.custom_attributes },
           });
 
           statements.push(
@@ -3140,7 +3261,7 @@ export default {
               String(crash.error_message || 'Unknown Crash'),
               crash.stack_trace ? String(crash.stack_trace) : null,
               isFatal,
-              formatPayload(crash.device_info || device_name),
+              formatPayload(cDeviceInfo),
               formatPayload(crash.custom_attributes),
               cIssue?.id || null,
               cFingerprint
@@ -3158,6 +3279,9 @@ export default {
               user_name: crash.user_name || user_name,
               job_id: effectiveJobId,
               issue_id: cIssue?.id || null,
+              os: cDetected.label,
+              os_icon: cDetected.icon,
+              platform: cDetected.key,
             }).catch(() => {});
           }
         }
