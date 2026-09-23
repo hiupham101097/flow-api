@@ -27,16 +27,39 @@ export default function AdminLayout() {
       </aside>
       <div className="app-main">
         <header className="topbar">
-          <div className="brand-lockup"><span className="scope-caption">Phân hệ {platformScope === 'web' ? 'Web' : 'App'}</span></div>
-          <div className="topbar-actions">
-            <button type="button" onClick={openPlatformModal} className={`platform-switch platform-switch-${platformScope}`} title="Đổi phân hệ App/Web">
-              <span>Phân hệ: {platformScope === 'web' ? 'Web' : 'App'}</span><span className="platform-switch-hint">Đổi</span>
+          <div className="brand-lockup">
+            <span className="topbar-crumb">Gden Flow</span>
+            <span className="topbar-crumb-sep">/</span>
+            <span className="topbar-crumb-title">Telemetry Hub</span>
+            <button
+              type="button"
+              onClick={openPlatformModal}
+              className={`platform-switch platform-switch-${platformScope}`}
+              title="Nhấn để đổi không gian quản lý App / Web"
+            >
+              <span className="platform-switch-dot" />
+              <span>{platformScope === 'web' ? '🌐 Web App' : '📱 Mobile App'}</span>
+              <span className="platform-switch-hint">⇄ Đổi</span>
             </button>
-            {user && <div className="account-chip">
-              <span className="account-platform-mark" aria-hidden="true">{user.role === 'web' ? 'W' : 'A'}</span>
-              <div className="account-copy"><strong>{user.username}</strong><span className={`account-role account-role-${user.role}`}>{user.role === 'web' ? 'Web Role' : 'App Role'}</span></div>
-              <button type="button" onClick={logout} className="logout-btn">Đăng xuất</button>
-            </div>}
+          </div>
+          <div className="topbar-actions">
+            {user && (
+              <div className="account-chip">
+                <span className="account-platform-mark" aria-hidden="true">{user.role === 'web' ? 'W' : 'A'}</span>
+                <div className="account-copy">
+                  <strong>{user.username}</strong>
+                  <span className={`account-role account-role-${user.role}`}>{user.role === 'web' ? 'Web Role' : 'App Role'}</span>
+                </div>
+                <button type="button" onClick={logout} className="logout-btn" title="Đăng xuất khỏi hệ thống">
+                  <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ marginRight: '0.2rem' }}>
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                    <polyline points="16 17 21 12 16 7" />
+                    <line x1="21" y1="12" x2="9" y2="12" />
+                  </svg>
+                  Đăng xuất
+                </button>
+              </div>
+            )}
             <span className="live-indicator"><span aria-hidden="true" /> Cloudflare D1 · Active</span>
           </div>
         </header>

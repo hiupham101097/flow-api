@@ -13,7 +13,7 @@ function readViews() {
   }
 }
 
-export default function SavedViews() {
+export default function SavedViews({ onNavigate }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [views, setViews] = useState(readViews);
@@ -34,28 +34,44 @@ export default function SavedViews() {
     setName('');
   };
 
+  const handleSelectView = (url) => {
+    navigate(url);
+    if (onNavigate) onNavigate();
+  };
+
   return (
-    <div className="saved-views" aria-label="View da luu">
+    <div className="saved-views" aria-label="Bộ lọc đã lưu">
       <div className="saved-views-create">
-        <label className="sr-only" htmlFor="saved-view-name">Ten view</label>
+        <label className="sr-only" htmlFor="saved-view-name">Tên view</label>
         <input
           id="saved-view-name"
           value={name}
           maxLength={48}
-          placeholder="Dat ten view hien tai"
+          placeholder="Đặt tên view hiện tại..."
           onChange={(event) => setName(event.target.value)}
           onKeyDown={(event) => event.key === 'Enter' && saveCurrent()}
         />
         <button type="button" className="secondary-btn compact-btn" onClick={saveCurrent} disabled={!name.trim() || currentIsSaved}>
-          {currentIsSaved ? 'Da luu' : 'Luu view'}
+          {currentIsSaved ? 'Đã lưu' : '+ Lưu view'}
         </button>
       </div>
       {views.length > 0 && (
         <div className="saved-views-list">
           {views.map((view) => (
             <span className="saved-view-chip" key={view.id}>
-              <button type="button" onClick={() => navigate(view.url)} title={view.url}>{view.name}</button>
-              <button type="button" className="saved-view-remove" aria-label={`Xoa view ${view.name}`} onClick={() => persist(views.filter((item) => item.id !== view.id))}>×</button>
+              <button type="button" onClick={() => handleSelectView(view.url)} title={view.url}>
+                <span className="saved-view-icon">🔖</span>
+                <span>{view.name}</span>
+              </button>
+              <button
+                type="button"
+                className="saved-view-remove"
+                aria-label={`Xóa view ${view.name}`}
+                title="Xóa view này"
+                onClick={() => persist(views.filter((item) => item.id !== view.id))}
+              >
+                ×
+              </button>
             </span>
           ))}
         </div>

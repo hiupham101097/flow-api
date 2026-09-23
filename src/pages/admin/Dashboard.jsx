@@ -6,6 +6,7 @@ import UserJourneyTimeline from '../../components/dashboard/UserJourneyTimeline'
 import SystemHealthSummary from '../../components/dashboard/SystemHealthSummary';
 import IssueManagementPanel from '../../components/dashboard/IssueManagementPanel';
 import SavedViews from '../../components/ui/SavedViews';
+import TelemetryControlBar from '../../components/dashboard/TelemetryControlBar';
 import { exportToCsv } from '../../utils/exportCsv';
 import { usePlatform } from '../../context/PlatformContext';
 
@@ -435,7 +436,7 @@ function Dashboard() {
   const [selectedCrash, setSelectedCrash] = useState(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
 
-  const { platformScope, openPlatformModal } = usePlatform();
+  const { platformScope, openPlatformModal, selectPlatform } = usePlatform();
   const [copiedItem, setCopiedItem] = useState(null);
   const [integrationOpen, setIntegrationOpen] = useState(false);
   const [setupTab, setSetupTab] = useState(platformScope === 'web' ? 'angular' : 'crashlytics');
@@ -1581,61 +1582,15 @@ export const appConfig: ApplicationConfig = {
 
   return (
     <div className="monitor-page">
-      {/* Page Title & Controls */}
+      {/* Page Title */}
       <div className="page-heading">
-        <div>
+        <div className="heading-copy">
           <h2>
             Giám sát Logs & Telemetry
           </h2>
           <p>
-            Theo dõi thời gian thực: API Calls, Firebase Crashlytics và Firebase Analytics từ Mobile App & Web.
+            Theo dõi thời gian thực: API Calls, Firebase Crashlytics và Firebase Analytics từ {platformScope === 'web' ? 'Web Application' : 'Mobile App di động'}.
           </p>
-        </div>
-
-        <div className="topbar-actions">
-          <div className="auto-refresh-dock">
-            <span style={{ fontSize: '0.78rem' }}>Tự làm mới:</span>
-            <CustomSelect
-              className="select-mini"
-              value={refreshInterval}
-              onChange={(val) => setRefreshInterval(Number(val))}
-              options={[
-                { value: 0, label: 'Tắt (Tiết kiệm PIN)' },
-                { value: 10000, label: '10 giây' },
-                { value: 15000, label: '15 giây' },
-                { value: 30000, label: '30 giây' },
-                { value: 60000, label: '1 phút (tiết kiệm D1)' },
-                { value: 300000, label: '5 phút' },
-              ]}
-              alignRight={true}
-              ariaLabel="Chu kỳ tự động tải dữ liệu mới"
-            />
-          </div>
-          <button
-            type="button"
-            className="secondary-btn"
-            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
-            onClick={() => setTelegramModalOpen(true)}
-            title="Cài đặt thông báo sự cố qua Telegram Bot"
-          >
-            <span>🔔</span>
-            <span>Cảnh báo Telegram</span>
-          </button>
-          <button
-            type="button"
-            className="secondary-btn"
-            onClick={() => navigate('/admin/setup')}
-          >
-            Cấu hình SDK
-          </button>
-          <button
-            type="button"
-            className="primary-btn"
-            disabled={loading}
-            onClick={() => { setLoading(true); fetchAllTelemetry(); }}
-          >
-            {loading ? 'Đang tải…' : '🔄 Làm mới'}
-          </button>
         </div>
       </div>
 
@@ -1670,159 +1625,34 @@ export const appConfig: ApplicationConfig = {
         platformScope={platformScope}
       />
 
-      {/* Mode Switcher Dock: Issues | Logs | Crashlytics | Analytics | Funnels | Timeline */}
-      <div className="telemetry-mode-dock">
-        <button
-          type="button"
-          className={`mode-pill-btn ${telemetryMode === 'issues' ? 'active' : ''}`}
-          onClick={() => { goMode('issues'); setSearchTerm(''); }}
-        >
-          <span>🚨 Sự cố (Issues)</span>
-          <span
-            className="mode-badge"
-            style={{
-              backgroundColor: unresolvedIssuesCount > 0 && telemetryMode !== 'issues' ? 'rgba(255, 119, 133, 0.25)' : undefined,
-              color: unresolvedIssuesCount > 0 && telemetryMode !== 'issues' ? '#ff7785' : undefined,
-            }}
-          >
-            {unresolvedIssuesCount}
-          </span>
-        </button>
-        <button
-          type="button"
-          className={`mode-pill-btn ${telemetryMode === 'logs' ? 'active' : ''}`}
-          onClick={() => { goMode('logs'); setSearchTerm(''); }}
-        >
-          <span>{platformScope === 'web' ? '📡 Nhật ký Web' : '📡 API Logs'}</span>
-          <span className="mode-badge">{scopedLogs.length}</span>
-        </button>
-        <button
-          type="button"
-          className={`mode-pill-btn ${telemetryMode === 'crashes' ? 'active' : ''}`}
-          onClick={() => { goMode('crashes'); setSearchTerm(''); }}
-        >
-          <span>{platformScope === 'web' ? '💥 Sự cố & Lỗi JS' : '💥 Crashlytics'}</span>
-          <span
-            className="mode-badge"
-            style={{
-              backgroundColor: fatalCrashes > 0 && telemetryMode !== 'crashes' ? 'rgba(255, 119, 133, 0.25)' : undefined,
-              color: fatalCrashes > 0 && telemetryMode !== 'crashes' ? '#ff7785' : undefined,
-            }}
-          >
-            {scopedCrashes.length}
-          </span>
-        </button>
-        <button
-          type="button"
-          className={`mode-pill-btn ${telemetryMode === 'analytics' ? 'active' : ''}`}
-          onClick={() => { goMode('analytics'); setSearchTerm(''); }}
-        >
-          <span>{platformScope === 'web' ? '📈 Tương tác Web' : '📈 Analytics & Sự kiện'}</span>
-          <span className="mode-badge">{scopedEvents.length}</span>
-        </button>
-        <button
-          type="button"
-          className={`mode-pill-btn ${telemetryMode === 'funnels' ? 'active' : ''}`}
-          onClick={() => { goMode('funnels'); setSearchTerm(''); }}
-        >
-          <span>📊 Thống kê sự kiện</span>
-          <span className="mode-badge">{funnels.length}</span>
-        </button>
-        <button
-          type="button"
-          className={`mode-pill-btn ${telemetryMode === 'timeline' ? 'active' : ''}`}
-          onClick={() => { goMode('timeline'); setSearchTerm(''); }}
-        >
-          <span>🧭 Hành trình User</span>
-          {timelineUser && (
-            <span className="mode-badge" style={{ backgroundColor: 'var(--accent-strong)', color: '#fff' }}>
-              {timelineUser.slice(0, 10)}
-            </span>
-          )}
-        </button>
-      </div>
-
-      {/* User & Job Selector Dock */}
-      <div className="user-filter-dock">
-        <div className="user-filter-info">
-          <span style={{ fontSize: '1.3rem' }}>🎯</span>
-          <div>
-            <strong>Mục tiêu giám sát:</strong>
-            <span style={{ fontSize: '0.86rem', color: 'var(--text-muted)', marginLeft: '0.5rem' }}>
-              {activeUserJob ? (
-                <>
-                  <span className={`type-badge ${activeUserJob.job_type === 'app' ? 'type-badge-app' : 'type-badge-web'}`} style={{ marginRight: '0.45rem' }}>
-                    {activeUserJob.job_type === 'app' ? '📱 App' : '🌐 Web'}
-                  </span>
-                  <b style={{ color: 'var(--text)' }}>{activeUserJob.job_name}</b>
-                  <span style={{ color: 'var(--text-dim)' }}> — Người phụ trách: {activeUserJob.name} (<code>{activeUserJob.app_identifier}</code>)</span>
-                </>
-              ) : (
-                platformScope === 'web'
-                  ? 'Toàn bộ Web App (Chỉ hiển thị API & Telemetry từ Web)'
-                  : 'Toàn bộ Mobile App (Chỉ hiển thị dữ liệu từ App di động)'
-              )}
-            </span>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            onClick={openPlatformModal}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '0.4rem',
-              padding: '0.38rem 0.75rem',
-              borderRadius: '20px',
-              border: `1px solid ${platformScope === 'web' ? 'rgba(34, 211, 238, 0.45)' : 'rgba(167, 139, 250, 0.45)'}`,
-              background: platformScope === 'web' ? 'rgba(34, 211, 238, 0.12)' : 'rgba(167, 139, 250, 0.12)',
-              color: platformScope === 'web' ? '#67e8f9' : '#c4b5fd',
-              fontSize: '0.78rem',
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
-            title="Bấm để đổi không gian quản lý giữa Web và App"
-          >
-            <span>{platformScope === 'web' ? '🌐 Phạm vi: Web App' : '📱 Phạm vi: Mobile App'}</span>
-            <span style={{ fontSize: '0.7rem', opacity: 0.8 }}>⇄ Đổi</span>
-          </button>
-
-          <CustomSelect
-            className="user-filter-custom"
-            value={selectedFilter}
-            onChange={(val) => handleFilterChange(val)}
-            options={[
-              {
-                value: 'all',
-                label: platformScope === 'web'
-                  ? '🌐 Toàn bộ Web App (Tất cả web telemetry)'
-                  : '📱 Toàn bộ Mobile App (Tất cả app telemetry)',
-              },
-              ...availableJobs.map((u) => ({
-                value: u.filterValue || u.id,
-                label: `${u.job_type === 'app' ? '📱' : '🌐'} ${u.job_name}${u.app_identifier ? ` (${u.app_identifier})` : ''}`,
-              })),
-            ]}
-            ariaLabel="Chọn mục tiêu giám sát"
-            placeholder="Chọn mục tiêu giám sát..."
-          />
-
-          {selectedFilter !== 'all' && (
-            <button
-              type="button"
-              className="view-btn"
-              style={{ fontSize: '0.78rem', padding: '0.5rem 0.85rem' }}
-              onClick={() => handleFilterChange('all')}
-            >
-              ✕ Xem tất cả
-            </button>
-          )}
-        </div>
-      </div>
-
-      <SavedViews />
+      {/* Thanh điều khiển tối ưu không gian: Menu ẩn chọn chế độ, mục tiêu và bộ lọc */}
+      <TelemetryControlBar
+        telemetryMode={telemetryMode}
+        onSelectMode={(mode) => { goMode(mode); setSearchTerm(''); }}
+        modeCounts={{
+          issues: unresolvedIssuesCount,
+          logs: scopedLogs.length,
+          crashes: scopedCrashes.length,
+          fatalCrashes: fatalCrashes,
+          events: scopedEvents.length,
+          funnels: funnels.length,
+          timelineUser: timelineUser,
+        }}
+        platformScope={platformScope}
+        onOpenPlatformModal={openPlatformModal}
+        onSelectPlatform={selectPlatform}
+        selectedFilter={selectedFilter}
+        onFilterChange={handleFilterChange}
+        availableJobs={availableJobs}
+        activeUserJob={activeUserJob}
+        refreshInterval={refreshInterval}
+        onRefreshIntervalChange={(val) => setRefreshInterval(Number(val))}
+        onOpenTelegramModal={() => setTelegramModalOpen(true)}
+        onNavigateSetup={() => navigate('/admin/setup')}
+        onRefresh={() => { setLoading(true); fetchAllTelemetry(); }}
+        loading={loading}
+        CustomSelect={CustomSelect}
+      />
 
       {/* Dynamic Metrics Summary Strip depending on active Mode */}
       {telemetryMode === 'logs' && (
