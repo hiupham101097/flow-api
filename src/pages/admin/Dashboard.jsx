@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import '../../styles/global.css';
 import TelegramSettingsModal from '../../components/dashboard/TelegramSettingsModal';
 import UserJourneyTimeline from '../../components/dashboard/UserJourneyTimeline';
 import SystemHealthSummary from '../../components/dashboard/SystemHealthSummary';
 import IssueManagementPanel from '../../components/dashboard/IssueManagementPanel';
+import SavedViews from '../../components/ui/SavedViews';
 import { exportToCsv } from '../../utils/exportCsv';
 import { usePlatform } from '../../context/PlatformContext';
 
@@ -361,12 +362,41 @@ function PaginationDock({ currentPage, totalItems, pageSize, onPageChange, onPag
   );
 }
 
+const MODE_TO_PATH = {
+  issues: 'issues',
+  logs: 'logs',
+  crashes: 'crashes',
+  analytics: 'events',
+  funnels: 'funnels',
+  timeline: 'timeline',
+};
+
+const PATH_TO_MODE = {
+  issues: 'issues',
+  logs: 'logs',
+  crashes: 'crashes',
+  events: 'analytics',
+  funnels: 'funnels',
+  timeline: 'timeline',
+};
+
 function Dashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { mode: routeMode } = useParams();
+  const navigate = useNavigate();
   const userIdFromUrl = searchParams.get('user_id');
+  const telemetryMode = PATH_TO_MODE[routeMode] || 'logs';
 
-  // Multi-telemetry Mode: 'issues' | 'logs' | 'crashes' | 'analytics' | 'funnels' | 'timeline'
-  const [telemetryMode, setTelemetryMode] = useState('logs');
+  const goMode = (mode) => {
+    const path = MODE_TO_PATH[mode] || 'logs';
+    navigate({ pathname: `/admin/monitor/${path}`, search: searchParams.toString() });
+  };
+
+  useEffect(() => {
+    if (!PATH_TO_MODE[routeMode]) {
+      navigate({ pathname: '/admin/monitor/logs', search: searchParams.toString() }, { replace: true });
+    }
+  }, [routeMode, navigate, searchParams]);
 
   // Issue APM unresolved count
   const [unresolvedIssuesCount, setUnresolvedIssuesCount] = useState(0);
@@ -381,21 +411,21 @@ function Dashboard() {
   const [quotaExceeded, setQuotaExceeded] = useState(false);
 
   // Sub-filter Tabs
-  const [activeTab, setActiveTab] = useState('all'); // for logs: 'all', '200', '400', '500'
-  const [crashTab, setCrashTab] = useState('all');   // for crashes: 'all', 'fatal', 'non-fatal'
-  const [eventTab, setEventTab] = useState('all');   // for analytics: 'all', 'custom', 'screen_view'
+  const [activeTab, setActiveTab] = useState(searchParams.get('status') || 'all'); // for logs: 'all', '200', '400', '500'
+  const [crashTab, setCrashTab] = useState(searchParams.get('severity') || 'all');   // for crashes: 'all', 'fatal', 'non-fatal'
+  const [eventTab, setEventTab] = useState(searchParams.get('type') || 'all');   // for analytics: 'all', 'custom', 'screen_view'
 
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState(searchParams.get('q') || '');
 
   // Pagination states (Mặc định 20 dòng để Mobile WebView mượt tuyệt đối)
   const [logsPage, setLogsPage] = useState(1);
-  const [logsPageSize, setLogsPageSize] = useState(20);
+  const [logsPageSize, setLogsPageSize] = useState(Number(searchParams.get('size')) || 20);
 
   const [crashPage, setCrashPage] = useState(1);
-  const [crashPageSize, setCrashPageSize] = useState(20);
+  const [crashPageSize, setCrashPageSize] = useState(Number(searchParams.get('size')) || 20);
 
   const [eventPage, setEventPage] = useState(1);
-  const [eventPageSize, setEventPageSize] = useState(20);
+  const [eventPageSize, setEventPageSize] = useState(Number(searchParams.get('size')) || 20);
 
   // Auto-refresh control (Mặc định 15s để không chiếm dụng CPU WebView)
   const [refreshInterval, setRefreshInterval] = useState(30000);
@@ -418,8 +448,8 @@ function Dashboard() {
   const [filterMeta, setFilterMeta] = useState({ apps: [], devices: [], users: [] });
   const [usersList, setUsersList] = useState([]);
   const [selectedFilter, setSelectedFilter] = useState(userIdFromUrl || 'all');
-  const [deviceFilter, setDeviceFilter] = useState('all');
-  const [userFilter, setUserFilter] = useState('all');
+  const [deviceFilter, setDeviceFilter] = useState(searchParams.get('device') || 'all');
+  const [userFilter, setUserFilter] = useState(searchParams.get('user') || 'all');
 
   const isFetchingUsersRef = useRef(false);
   const isFetchingMetaRef = useRef(false);
@@ -438,16 +468,29 @@ function Dashboard() {
 
   // Telegram Alerting & User Journey Timeline states
   const [telegramModalOpen, setTelegramModalOpen] = useState(false);
-  const [timelineUser, setTimelineUser] = useState('');
-  const [timelineDevice, setTimelineDevice] = useState('');
-  const [timelineApp, setTimelineApp] = useState('');
+  const [timelineUser, setTimelineUser] = useState(searchParams.get('user') || '');
+  const [timelineDevice, setTimelineDevice] = useState(searchParams.get('device') || '');
+  const [timelineApp, setTimelineApp] = useState(searchParams.get('app') || '');
 
   const viewUserTimeline = ({ user = '', device = '', app = '' }) => {
     setTimelineUser(user);
     setTimelineDevice(device);
     setTimelineApp(app);
-    setTelemetryMode('timeline');
+    const next = new URLSearchParams(searchParams);
+    if (user) next.set('user', user); else next.delete('user');
+    if (device) next.set('device', device); else next.delete('device');
+    if (app) next.set('app', app); else next.delete('app');
+    navigate({ pathname: '/admin/monitor/timeline', search: next.toString() });
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const setMonitorQuery = (updates, options = {}) => {
+    const next = new URLSearchParams(searchParams);
+    Object.entries(updates).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === '' || value === 'all') next.delete(key);
+      else next.set(key, String(value));
+    });
+    setSearchParams(next, { replace: options.replace !== false });
   };
 
   const copyToClipboard = async (value, item) => {
@@ -700,23 +743,30 @@ function Dashboard() {
   const handleFilterChange = (val) => {
     setSelectedFilter(val);
     if (val === 'all') {
-      setSearchParams({});
+      setMonitorQuery({ user_id: null });
       fetchAllTelemetry('all', deviceFilter, userFilter);
     } else {
-      setSearchParams({ user_id: val });
+      setMonitorQuery({ user_id: val });
       fetchAllTelemetry(val, deviceFilter, userFilter);
     }
   };
 
   const handleDeviceChange = (val) => {
     setDeviceFilter(val);
+    setMonitorQuery({ device: val });
     fetchAllTelemetry(selectedFilter, val, userFilter);
   };
 
   const handleUserChange = (val) => {
     setUserFilter(val);
+    setMonitorQuery({ user: val });
     fetchAllTelemetry(selectedFilter, deviceFilter, val);
   };
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setMonitorQuery({ q: searchTerm }), 250);
+    return () => window.clearTimeout(timer);
+  }, [searchTerm]);
 
   // WinForms WebView2 Interop Bridge
   useEffect(() => {
@@ -1497,15 +1547,47 @@ export const appConfig: ApplicationConfig = {
     return filteredEvents.slice(start, start + eventPageSize);
   }, [filteredEvents, eventPage, eventPageSize]);
 
+  useEffect(() => {
+    if (!['logs', 'crashes', 'analytics'].includes(telemetryMode)) return undefined;
+    const onKeyDown = (event) => {
+      const target = event.target;
+      const isTyping = target instanceof HTMLElement && (
+        target.matches('input, textarea, select') || target.isContentEditable
+      );
+      if (event.key === '/' && !isTyping) {
+        event.preventDefault();
+        document.querySelector('.log-panel input[type="search"]')?.focus();
+        return;
+      }
+      if (isTyping || !['j', 'k', 'Enter'].includes(event.key)) return;
+      const rows = Array.from(document.querySelectorAll('.log-panel tbody tr[data-monitor-row]'));
+      if (!rows.length) return;
+      const current = document.activeElement?.closest?.('tr[data-monitor-row]');
+      let index = Math.max(0, rows.indexOf(current));
+      if (event.key === 'j') index = Math.min(rows.length - 1, current ? index + 1 : 0);
+      if (event.key === 'k') index = Math.max(0, current ? index - 1 : 0);
+      if (event.key === 'Enter' && current) {
+        event.preventDefault();
+        current.click();
+        return;
+      }
+      event.preventDefault();
+      rows[index].focus();
+      rows[index].scrollIntoView({ block: 'nearest' });
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [telemetryMode, paginatedLogs, paginatedCrashes, paginatedEvents]);
+
   return (
-    <div style={{ paddingTop: '1.25rem' }}>
+    <div className="monitor-page">
       {/* Page Title & Controls */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
+      <div className="page-heading">
         <div>
-          <h2 style={{ fontSize: '1.45rem', fontWeight: 700, margin: 0, color: 'var(--text)' }}>
+          <h2>
             Giám sát Logs & Telemetry
           </h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.2rem' }}>
+          <p>
             Theo dõi thời gian thực: API Calls, Firebase Crashlytics và Firebase Analytics từ Mobile App & Web.
           </p>
         </div>
@@ -1542,14 +1624,9 @@ export const appConfig: ApplicationConfig = {
           <button
             type="button"
             className="secondary-btn"
-            onClick={() => {
-              if (!integrationOpen) {
-                setSetupTab(platformScope === 'web' ? 'angular' : 'crashlytics');
-              }
-              setIntegrationOpen((prev) => !prev);
-            }}
+            onClick={() => navigate('/admin/setup')}
           >
-            🔌 Cấu hình SDK ({platformScope === 'web' ? 'Web / Angular' : 'Flutter App'})
+            Cấu hình SDK
           </button>
           <button
             type="button"
@@ -1598,7 +1675,7 @@ export const appConfig: ApplicationConfig = {
         <button
           type="button"
           className={`mode-pill-btn ${telemetryMode === 'issues' ? 'active' : ''}`}
-          onClick={() => { setTelemetryMode('issues'); setSearchTerm(''); }}
+          onClick={() => { goMode('issues'); setSearchTerm(''); }}
         >
           <span>🚨 Sự cố (Issues)</span>
           <span
@@ -1614,7 +1691,7 @@ export const appConfig: ApplicationConfig = {
         <button
           type="button"
           className={`mode-pill-btn ${telemetryMode === 'logs' ? 'active' : ''}`}
-          onClick={() => { setTelemetryMode('logs'); setSearchTerm(''); }}
+          onClick={() => { goMode('logs'); setSearchTerm(''); }}
         >
           <span>{platformScope === 'web' ? '📡 Nhật ký Web' : '📡 API Logs'}</span>
           <span className="mode-badge">{scopedLogs.length}</span>
@@ -1622,7 +1699,7 @@ export const appConfig: ApplicationConfig = {
         <button
           type="button"
           className={`mode-pill-btn ${telemetryMode === 'crashes' ? 'active' : ''}`}
-          onClick={() => { setTelemetryMode('crashes'); setSearchTerm(''); }}
+          onClick={() => { goMode('crashes'); setSearchTerm(''); }}
         >
           <span>{platformScope === 'web' ? '💥 Sự cố & Lỗi JS' : '💥 Crashlytics'}</span>
           <span
@@ -1638,7 +1715,7 @@ export const appConfig: ApplicationConfig = {
         <button
           type="button"
           className={`mode-pill-btn ${telemetryMode === 'analytics' ? 'active' : ''}`}
-          onClick={() => { setTelemetryMode('analytics'); setSearchTerm(''); }}
+          onClick={() => { goMode('analytics'); setSearchTerm(''); }}
         >
           <span>{platformScope === 'web' ? '📈 Tương tác Web' : '📈 Analytics & Sự kiện'}</span>
           <span className="mode-badge">{scopedEvents.length}</span>
@@ -1646,7 +1723,7 @@ export const appConfig: ApplicationConfig = {
         <button
           type="button"
           className={`mode-pill-btn ${telemetryMode === 'funnels' ? 'active' : ''}`}
-          onClick={() => { setTelemetryMode('funnels'); setSearchTerm(''); }}
+          onClick={() => { goMode('funnels'); setSearchTerm(''); }}
         >
           <span>📊 Thống kê sự kiện</span>
           <span className="mode-badge">{funnels.length}</span>
@@ -1654,7 +1731,7 @@ export const appConfig: ApplicationConfig = {
         <button
           type="button"
           className={`mode-pill-btn ${telemetryMode === 'timeline' ? 'active' : ''}`}
-          onClick={() => { setTelemetryMode('timeline'); setSearchTerm(''); }}
+          onClick={() => { goMode('timeline'); setSearchTerm(''); }}
         >
           <span>🧭 Hành trình User</span>
           {timelineUser && (
@@ -1745,6 +1822,8 @@ export const appConfig: ApplicationConfig = {
         </div>
       </div>
 
+      <SavedViews />
+
       {/* Dynamic Metrics Summary Strip depending on active Mode */}
       {telemetryMode === 'logs' && (
         <section className="metrics-strip" aria-label="API telemetry summary">
@@ -1763,11 +1842,11 @@ export const appConfig: ApplicationConfig = {
             <strong style={{ color: count400 ? 'var(--warning)' : 'inherit' }}>{count400}</strong>
             <small>{count400 ? 'Sai tham số / Xác thực' : 'Không có lỗi 4xx'}</small>
           </div>
-          <div className="metric-item">
+          <button type="button" className="metric-item metric-action" onClick={() => { setActiveTab('500'); setMonitorQuery({ status: '500' }); }} aria-label={`Lọc ${count500} lỗi máy chủ 5xx`}>
             <span>5xx Lỗi Server</span>
             <strong className={count500 ? 'metric-error' : ''}>{count500}</strong>
             <small>{count500 ? 'Ngoại lệ máy chủ' : 'Hệ thống ổn định'}</small>
-          </div>
+          </button>
           <div className="metric-item">
             <span>Độ trễ trung bình</span>
             <strong>{avgDuration}<em>ms</em></strong>
@@ -1783,13 +1862,13 @@ export const appConfig: ApplicationConfig = {
             <strong>{totalCrashes}</strong>
             <small>{selectedFilter === 'all' ? (platformScope === 'web' ? 'Toàn bộ Web App' : 'Toàn bộ Mobile App') : `Cho ${activeUserJob?.name}`}</small>
           </div>
-          <div className="metric-item">
+          <button type="button" className="metric-item metric-action" onClick={() => { setCrashTab('fatal'); setMonitorQuery({ severity: 'fatal' }); }} aria-label={`Lọc ${fatalCrashes} crash fatal`}>
             <span>{platformScope === 'web' ? 'Fatal Errors (Sập trang/Runtime)' : 'Fatal Crashes (Sập App)'}</span>
             <strong style={{ color: fatalCrashes > 0 ? '#ff7785' : 'var(--success)' }}>
               {fatalCrashes}
             </strong>
             <small>{fatalCrashes > 0 ? 'Cần xử lý khẩn cấp' : 'Không có crash fatal'}</small>
-          </div>
+          </button>
           <div className="metric-item">
             <span>Non-Fatal (Ngoại lệ)</span>
             <strong style={{ color: nonFatalCrashes > 0 ? 'var(--warning)' : 'inherit' }}>
@@ -1902,7 +1981,7 @@ export const appConfig: ApplicationConfig = {
       )}
 
       {/* MODAL DIALOG: CẤU HÌNH SDK TELEMETRY */}
-      {integrationOpen && (
+      {false && integrationOpen && (
         <div
           className="modal-overlay"
           onClick={() => setIntegrationOpen(false)}
@@ -2190,7 +2269,7 @@ export const appConfig: ApplicationConfig = {
                   role="tab"
                   aria-selected={activeTab === 'all'}
                   className={`filter-tab ${activeTab === 'all' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('all')}
+                  onClick={() => { setActiveTab('all'); setMonitorQuery({ status: null }); }}
                 >
                   Tất cả <span className="tab-count">{totalCalls}</span>
                 </button>
@@ -2199,7 +2278,7 @@ export const appConfig: ApplicationConfig = {
                   role="tab"
                   aria-selected={activeTab === '200'}
                   className={`filter-tab tab-success ${activeTab === '200' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('200')}
+                  onClick={() => { setActiveTab('200'); setMonitorQuery({ status: '200' }); }}
                 >
                   <span className="dot dot-success" /> 200 OK <span className="tab-count">{count200}</span>
                 </button>
@@ -2208,7 +2287,7 @@ export const appConfig: ApplicationConfig = {
                   role="tab"
                   aria-selected={activeTab === '400'}
                   className={`filter-tab tab-warning ${activeTab === '400' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('400')}
+                  onClick={() => { setActiveTab('400'); setMonitorQuery({ status: '400' }); }}
                 >
                   <span className="dot dot-warning" /> 4xx Lỗi Client <span className="tab-count">{count400}</span>
                 </button>
@@ -2217,7 +2296,7 @@ export const appConfig: ApplicationConfig = {
                   role="tab"
                   aria-selected={activeTab === '500'}
                   className={`filter-tab tab-danger ${activeTab === '500' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('500')}
+                  onClick={() => { setActiveTab('500'); setMonitorQuery({ status: '500' }); }}
                 >
                   <span className="dot dot-danger" /> 5xx Lỗi Server <span className="tab-count">{count500}</span>
                 </button>
@@ -2333,6 +2412,8 @@ export const appConfig: ApplicationConfig = {
                   return (
                     <tr
                       key={log.id}
+                      data-monitor-row
+                      tabIndex={0}
                       className={statusMeta.type !== '200' ? 'row-error' : ''}
                       onClick={() => openDetail('log', log, setSelectedLog)}
                       style={{ cursor: 'pointer' }}
@@ -2445,7 +2526,7 @@ export const appConfig: ApplicationConfig = {
             totalItems={filteredLogs.length}
             pageSize={logsPageSize}
             onPageChange={setLogsPage}
-            onPageSizeChange={(newSize) => { setLogsPageSize(newSize); setLogsPage(1); }}
+            onPageSizeChange={(newSize) => { setLogsPageSize(newSize); setLogsPage(1); setMonitorQuery({ size: newSize }); }}
           />
         </section>
       )}
@@ -2466,7 +2547,7 @@ export const appConfig: ApplicationConfig = {
                   role="tab"
                   aria-selected={crashTab === 'all'}
                   className={`filter-tab ${crashTab === 'all' ? 'active' : ''}`}
-                  onClick={() => setCrashTab('all')}
+                  onClick={() => { setCrashTab('all'); setMonitorQuery({ severity: null }); }}
                 >
                   Tất cả <span className="tab-count">{totalCrashes}</span>
                 </button>
@@ -2476,7 +2557,7 @@ export const appConfig: ApplicationConfig = {
                   aria-selected={crashTab === 'android'}
                   className={`filter-tab ${crashTab === 'android' ? 'active' : ''}`}
                   style={{ color: crashTab === 'android' ? '#4ade80' : undefined }}
-                  onClick={() => setCrashTab('android')}
+                  onClick={() => { setCrashTab('android'); setMonitorQuery({ severity: 'android' }); }}
                   title="Chỉ lọc sự cố trên hệ điều hành Android"
                 >
                   🤖 Android <span className="tab-count">{androidCrashes}</span>
@@ -2487,7 +2568,7 @@ export const appConfig: ApplicationConfig = {
                   aria-selected={crashTab === 'ios'}
                   className={`filter-tab ${crashTab === 'ios' ? 'active' : ''}`}
                   style={{ color: crashTab === 'ios' ? '#38bdf8' : undefined }}
-                  onClick={() => setCrashTab('ios')}
+                  onClick={() => { setCrashTab('ios'); setMonitorQuery({ severity: 'ios' }); }}
                   title="Chỉ lọc sự cố trên hệ điều hành iOS"
                 >
                   🍎 iOS <span className="tab-count">{iosCrashes}</span>
@@ -2497,7 +2578,7 @@ export const appConfig: ApplicationConfig = {
                   role="tab"
                   aria-selected={crashTab === 'fatal'}
                   className={`filter-tab tab-danger ${crashTab === 'fatal' ? 'active' : ''}`}
-                  onClick={() => setCrashTab('fatal')}
+                  onClick={() => { setCrashTab('fatal'); setMonitorQuery({ severity: 'fatal' }); }}
                 >
                   <span className="dot dot-danger" /> {platformScope === 'web' ? 'Fatal (Lỗi Runtime)' : 'Fatal (Sập App)'} <span className="tab-count">{fatalCrashes}</span>
                 </button>
@@ -2506,7 +2587,7 @@ export const appConfig: ApplicationConfig = {
                   role="tab"
                   aria-selected={crashTab === 'non-fatal'}
                   className={`filter-tab tab-warning ${crashTab === 'non-fatal' ? 'active' : ''}`}
-                  onClick={() => setCrashTab('non-fatal')}
+                  onClick={() => { setCrashTab('non-fatal'); setMonitorQuery({ severity: 'non-fatal' }); }}
                 >
                   <span className="dot dot-warning" /> {platformScope === 'web' ? 'Non-fatal (Cảnh báo)' : 'Non-fatal (Ngoại lệ)'} <span className="tab-count">{nonFatalCrashes}</span>
                 </button>
@@ -2612,6 +2693,8 @@ export const appConfig: ApplicationConfig = {
                   return (
                     <tr
                       key={crash.id}
+                      data-monitor-row
+                      tabIndex={0}
                       className={isFatal ? 'row-error' : ''}
                       onClick={() => openDetail('crash', crash, setSelectedCrash)}
                       style={{ cursor: 'pointer' }}
@@ -2702,7 +2785,7 @@ export const appConfig: ApplicationConfig = {
             totalItems={filteredCrashes.length}
             pageSize={crashPageSize}
             onPageChange={setCrashPage}
-            onPageSizeChange={(newSize) => { setCrashPageSize(newSize); setCrashPage(1); }}
+            onPageSizeChange={(newSize) => { setCrashPageSize(newSize); setCrashPage(1); setMonitorQuery({ size: newSize }); }}
           />
         </section>
       )}
@@ -2723,7 +2806,7 @@ export const appConfig: ApplicationConfig = {
                   role="tab"
                   aria-selected={eventTab === 'all'}
                   className={`filter-tab ${eventTab === 'all' ? 'active' : ''}`}
-                  onClick={() => setEventTab('all')}
+                  onClick={() => { setEventTab('all'); setMonitorQuery({ type: null }); }}
                 >
                   Tất cả <span className="tab-count">{totalEvents}</span>
                 </button>
@@ -2732,7 +2815,7 @@ export const appConfig: ApplicationConfig = {
                   role="tab"
                   aria-selected={eventTab === 'custom'}
                   className={`filter-tab tab-accent ${eventTab === 'custom' ? 'active' : ''}`}
-                  onClick={() => setEventTab('custom')}
+                  onClick={() => { setEventTab('custom'); setMonitorQuery({ type: 'custom' }); }}
                 >
                   ⚡ Custom Events <span className="tab-count">{customEventCount}</span>
                 </button>
@@ -2741,7 +2824,7 @@ export const appConfig: ApplicationConfig = {
                   role="tab"
                   aria-selected={eventTab === 'screen_view'}
                   className={`filter-tab tab-success ${eventTab === 'screen_view' ? 'active' : ''}`}
-                  onClick={() => setEventTab('screen_view')}
+                  onClick={() => { setEventTab('screen_view'); setMonitorQuery({ type: 'screen_view' }); }}
                 >
                   {platformScope === 'web' ? '🌐 Route / Page Views' : '📱 Screen Views'} <span className="tab-count">{screenViewCount}</span>
                 </button>
@@ -2848,6 +2931,8 @@ export const appConfig: ApplicationConfig = {
                   return (
                     <tr
                       key={event.id}
+                      data-monitor-row
+                      tabIndex={0}
                       onClick={() => openDetail('event', event, setSelectedEvent)}
                       style={{ cursor: 'pointer' }}
                       title="Nhấn để xem chi tiết tham số"
@@ -2944,7 +3029,7 @@ export const appConfig: ApplicationConfig = {
             totalItems={filteredEvents.length}
             pageSize={eventPageSize}
             onPageChange={setEventPage}
-            onPageSizeChange={(newSize) => { setEventPageSize(newSize); setEventPage(1); }}
+            onPageSizeChange={(newSize) => { setEventPageSize(newSize); setEventPage(1); setMonitorQuery({ size: newSize }); }}
           />
         </section>
       )}

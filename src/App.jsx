@@ -1,12 +1,18 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import AdminLayout from './layouts/AdminLayout';
 import Dashboard from './pages/admin/Dashboard';
 import UserManager from './pages/admin/UserManager';
+import Setup from './pages/admin/Setup';
 import Login from './pages/Login';
 import { PlatformProvider } from './context/PlatformContext';
 import { AuthProvider, ProtectedRoute } from './context/AuthContext';
 import PlatformSelectionModal from './components/dashboard/PlatformSelectionModal';
+
+function LegacyDashboardRedirect() {
+  const { search } = useLocation();
+  return <Navigate to={`/admin/monitor/logs${search}`} replace />;
+}
 
 function App() {
   return (
@@ -26,8 +32,10 @@ function App() {
                 </ProtectedRoute>
               }
             >
-              <Route path="dashboard" element={<Dashboard />} />
+              <Route path="dashboard" element={<LegacyDashboardRedirect />} />
+              <Route path="monitor/:mode" element={<Dashboard />} />
               <Route path="users" element={<UserManager />} />
+              <Route path="setup" element={<Setup />} />
             </Route>
 
             <Route path="*" element={<Navigate to="/login" replace />} />
