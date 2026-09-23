@@ -2900,8 +2900,8 @@ export const appConfig: ApplicationConfig = {
                   <th style={{ width: '20%' }}>Tên sự kiện (Event)</th>
                   <th style={{ width: '16%' }}>Màn hình (Screen)</th>
                   <th style={{ width: '14%' }}>Người dùng (User ID)</th>
-                  <th>Tham số (Parameters)</th>
-                  <th style={{ width: '80px' }}><span className="sr-only">Thao tác</span></th>
+                  <th className="parameters-column">Tham số (Parameters)</th>
+                  <th className="events-actions-column"><span className="sr-only">Thao tác</span></th>
                 </tr>
               </thead>
               <tbody>
@@ -2972,7 +2972,7 @@ export const appConfig: ApplicationConfig = {
                           <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem' }}>Ẩn danh</span>
                         )}
                       </td>
-                      <td>
+                      <td className="parameters-cell">
                         {paramsParsed && typeof paramsParsed === 'object' ? (
                           <div className="key-value-pill-list">
                             {Object.entries(paramsParsed).slice(0, 3).map(([k, v]) => (
@@ -2988,7 +2988,7 @@ export const appConfig: ApplicationConfig = {
                           <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem' }}>Không có params</span>
                         )}
                       </td>
-                      <td className="action-cell" style={{ display: 'flex', gap: '0.35rem', justifyContent: 'flex-end' }}>
+                      <td className="action-cell events-action-cell">
                         <button
                           type="button"
                           className="view-btn"

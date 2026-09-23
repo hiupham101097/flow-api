@@ -2845,9 +2845,44 @@ tbody tr.row-error:hover {
 .page-heading h2 { margin: 0; color: var(--text); font-size: 1.45rem; font-weight: 720; letter-spacing: -0.018em; }
 .page-heading p { max-width: 72ch; margin: 0.25rem 0 0; color: var(--text-muted); font-size: 0.84rem; line-height: 1.5; }
 
-.metric-action { width: 100%; appearance: none; text-align: left; font: inherit; cursor: pointer; }
-.metric-action:hover { background: var(--surface-hover); }
+.metric-action {
+  width: 100%;
+  appearance: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.metric-action:hover { background: rgb(255 255 255 / 2.5%); }
 .metric-action:focus-visible { position: relative; z-index: 1; outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.log-panel[aria-labelledby="analytics-log-title"] table { min-width: 1160px; }
+.log-panel[aria-labelledby="analytics-log-title"] .parameters-column { width: 270px; }
+.log-panel[aria-labelledby="analytics-log-title"] .events-actions-column { width: 116px; }
+.log-panel[aria-labelledby="analytics-log-title"] .parameters-cell {
+  overflow: visible;
+  white-space: normal;
+}
+.log-panel[aria-labelledby="analytics-log-title"] .key-value-pill-list {
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+.log-panel[aria-labelledby="analytics-log-title"] .key-value-chip {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.events-action-cell {
+  display: table-cell !important;
+  text-align: right;
+  white-space: nowrap;
+}
+.events-action-cell .view-btn + .view-btn { margin-left: 0.35rem; }
 
 .saved-views { display: flex; align-items: flex-start; gap: 0.75rem; flex-wrap: wrap; margin: 0 0 1rem; }
 .saved-views-create { display: flex; align-items: center; gap: 0.45rem; }
