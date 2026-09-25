@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { getApiUrl } from '../../constants/api';
 
 function IssueDetailModal({ issueId, isOpen, onClose, onStatusChanged, onViewUserTimeline }) {
   const [data, setData] = useState(null);
@@ -16,7 +17,7 @@ function IssueDetailModal({ issueId, isOpen, onClose, onStatusChanged, onViewUse
   const fetchDetail = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/issues/${issueId}`);
+      const res = await fetch(getApiUrl(`/issues/${issueId}`));
       if (res.ok) {
         const json = await res.json();
         setData(json);
@@ -31,7 +32,7 @@ function IssueDetailModal({ issueId, isOpen, onClose, onStatusChanged, onViewUse
   const handleUpdateStatus = async (newStatus) => {
     setUpdating(true);
     try {
-      const res = await fetch(`/issues/${issueId}`, {
+      const res = await fetch(getApiUrl(`/issues/${issueId}`), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus }),

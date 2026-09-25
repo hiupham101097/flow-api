@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { getApiUrl } from '../../constants/api';
 
 function TelegramSettingsModal({ isOpen, onClose, onSaved }) {
   const [loading, setLoading] = useState(false);
@@ -24,7 +25,7 @@ function TelegramSettingsModal({ isOpen, onClose, onSaved }) {
     setLoading(true);
     setStatusMsg(null);
     try {
-      const res = await fetch('/settings/telegram');
+      const res = await fetch(getApiUrl('/settings/telegram'));
       if (res.ok) {
         const data = await res.json();
         setIsConfigured(Boolean(data.configured));
@@ -45,7 +46,7 @@ function TelegramSettingsModal({ isOpen, onClose, onSaved }) {
     setTesting(true);
     setStatusMsg(null);
     try {
-      const res = await fetch('/settings/telegram/test', {
+      const res = await fetch(getApiUrl('/settings/telegram/test'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -71,7 +72,7 @@ function TelegramSettingsModal({ isOpen, onClose, onSaved }) {
     setSaving(true);
     setStatusMsg(null);
     try {
-      const res = await fetch('/settings/telegram', {
+      const res = await fetch(getApiUrl('/settings/telegram'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

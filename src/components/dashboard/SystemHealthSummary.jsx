@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { getApiUrl } from '../../constants/api';
 
 function SystemHealthSummary({ selectedApp = '', platformScope = 'app' }) {
   const [health, setHealth] = useState(null);
@@ -18,7 +19,7 @@ function SystemHealthSummary({ selectedApp = '', platformScope = 'app' }) {
       if (selectedApp && selectedApp !== 'all') {
         queryParams.set('app_identifier', selectedApp);
       }
-      const url = `/telemetry/health?${queryParams.toString()}`;
+      const url = getApiUrl(`/telemetry/health?${queryParams.toString()}`);
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();

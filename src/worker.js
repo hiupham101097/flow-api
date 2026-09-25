@@ -730,6 +730,10 @@ async function ensureSchema(db) {
       )
     `).run();
 
+    try {
+      await db.prepare('ALTER TABLE app_crashes ADD COLUMN device_name TEXT').run();
+    } catch (_) {}
+
     // 6. Tạo bảng app_events nếu chưa có
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS app_events (
@@ -1543,7 +1547,7 @@ const decorateRows = (rows, dims) => {
  * Chuyển bộ lọc của dashboard thành MỘT điều kiện dùng được index.
  * Hỗ trợ phân quyền phân hệ platform ('web' hoặc 'app').
  */
-const buildScopeClause = (dims, { userId, jobId, appIdentifier, platform }, columnPrefix = '') => {
+const buildScopeClause = (dims, { userId, jobId, appIdentifier, platform }, columnPrefix = '', deviceColumn = 'device_name') => {
   let jobs = dims.jobs;
 
   // Lọc theo nền tảng nếu có
@@ -1586,7 +1590,7 @@ const buildScopeClause = (dims, { userId, jobId, appIdentifier, platform }, colu
     const uniqueWebAppIds = Array.from(new Set(webAppIds));
 
     return {
-      clause: ` AND (${columnPrefix}app_identifier IN (${uniqueWebAppIds.map(() => '?').join(', ')}) OR ${columnPrefix}app_identifier LIKE '%web%' OR ${columnPrefix}device_name LIKE '%Web%' OR ${columnPrefix}device_name LIKE '%Chrome%' OR ${columnPrefix}device_name LIKE '%Firefox%' OR ${columnPrefix}device_name LIKE '%Safari%' OR ${columnPrefix}device_name LIKE '%Edge%')`,
+      clause: ` AND (${columnPrefix}app_identifier IN (${uniqueWebAppIds.map(() => '?').join(', ')}) OR ${columnPrefix}app_identifier LIKE '%web%' OR ${columnPrefix}${deviceColumn} LIKE '%Web%' OR ${columnPrefix}${deviceColumn} LIKE '%Chrome%' OR ${columnPrefix}${deviceColumn} LIKE '%Firefox%' OR ${columnPrefix}${deviceColumn} LIKE '%Safari%' OR ${columnPrefix}${deviceColumn} LIKE '%Edge%')`,
       params: uniqueWebAppIds,
     };
   }
@@ -1598,7 +1602,7 @@ const buildScopeClause = (dims, { userId, jobId, appIdentifier, platform }, colu
     const uniqueWebAppIds = Array.from(new Set(webAppIds));
 
     return {
-      clause: ` AND (${columnPrefix}app_identifier NOT IN (${uniqueWebAppIds.map(() => '?').join(', ')}) OR ${columnPrefix}app_identifier IS NULL) AND (${columnPrefix}app_identifier NOT LIKE '%web%' OR ${columnPrefix}app_identifier IS NULL) AND (${columnPrefix}device_name IS NULL OR (${columnPrefix}device_name NOT LIKE '%Chrome%' AND ${columnPrefix}device_name NOT LIKE '%Firefox%' AND ${columnPrefix}device_name NOT LIKE '%Safari%' AND ${columnPrefix}device_name NOT LIKE '%Edge%' AND ${columnPrefix}device_name NOT LIKE '%Web Browser%'))`,
+      clause: ` AND (${columnPrefix}app_identifier NOT IN (${uniqueWebAppIds.map(() => '?').join(', ')}) OR ${columnPrefix}app_identifier IS NULL) AND (${columnPrefix}app_identifier NOT LIKE '%web%' OR ${columnPrefix}app_identifier IS NULL) AND (${columnPrefix}${deviceColumn} IS NULL OR (${columnPrefix}${deviceColumn} NOT LIKE '%Chrome%' AND ${columnPrefix}${deviceColumn} NOT LIKE '%Firefox%' AND ${columnPrefix}${deviceColumn} NOT LIKE '%Safari%' AND ${columnPrefix}${deviceColumn} NOT LIKE '%Edge%' AND ${columnPrefix}${deviceColumn} NOT LIKE '%Web Browser%'))`,
       params: uniqueWebAppIds,
     };
   }
@@ -2185,7 +2189,7 @@ export default {
           jobId: url.searchParams.get('job_id'),
           appIdentifier: url.searchParams.get('app_identifier') || url.searchParams.get('app_id'),
           platform: url.searchParams.get('platform') || url.searchParams.get('job_type'),
-        });
+        }, '', 'device_info');
         query += scope.clause;
         params.push(...scope.params);
 

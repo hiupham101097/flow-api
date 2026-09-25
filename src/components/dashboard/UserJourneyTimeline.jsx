@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { exportToCsv } from '../../utils/exportCsv';
+import { getApiUrl } from '../../constants/api';
 
 function UserJourneyTimeline({
   initialUser = '',
@@ -41,7 +42,7 @@ function UserJourneyTimeline({
       if (app) params.append('app_identifier', app);
       params.append('limit', limit);
 
-      const res = await fetch(`/telemetry/timeline?${params.toString()}`);
+      const res = await fetch(getApiUrl(`/telemetry/timeline?${params.toString()}`));
       const data = await res.json();
       if (res.ok) {
         setItems(data.items || []);

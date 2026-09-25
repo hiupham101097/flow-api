@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import IssueDetailModal from './IssueDetailModal';
+import { getApiUrl } from '../../constants/api';
 
 function IssueManagementPanel({ selectedApp = '', activeUserJob = null, onViewUserTimeline }) {
   const [issues, setIssues] = useState([]);
@@ -34,7 +35,7 @@ function IssueManagementPanel({ selectedApp = '', activeUserJob = null, onViewUs
       params.set('limit', String(limit));
       params.set('offset', String(page * limit));
 
-      const res = await fetch(`/issues?${params.toString()}`);
+      const res = await fetch(getApiUrl(`/issues?${params.toString()}`));
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setIssues(data.issues || []);
@@ -57,7 +58,7 @@ function IssueManagementPanel({ selectedApp = '', activeUserJob = null, onViewUs
     if (e) e.stopPropagation();
     setActionLoadingId(issueId);
     try {
-      const res = await fetch(`/issues/${issueId}`, {
+      const res = await fetch(getApiUrl(`/issues/${issueId}`), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus }),

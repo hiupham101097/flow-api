@@ -9,8 +9,7 @@ import SavedViews from '../../components/ui/SavedViews';
 import TelemetryControlBar from '../../components/dashboard/TelemetryControlBar';
 import { exportToCsv } from '../../utils/exportCsv';
 import { usePlatform } from '../../context/PlatformContext';
-
-const API_MONITOR_URL = import.meta.env.VITE_WORKER_URL || 'https://flow-api.hieupham101097.workers.dev';
+import { API_MONITOR_URL } from '../../constants/api';
 
 // Nhận diện dữ liệu thuộc Web hay Mobile App
 function isItemWeb(item) {
