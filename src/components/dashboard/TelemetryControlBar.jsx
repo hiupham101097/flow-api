@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import SavedViews from '../ui/SavedViews';
+import CustomSelectComponent from '../ui/CustomSelect';
 
 // SVG Icons tinh tế, sắc nét theo chuẩn thiết kế hiện đại
 export const ModeIcons = {
@@ -87,7 +88,7 @@ export default function TelemetryControlBar({
   onNavigateSetup,
   onRefresh,
   loading = false,
-  CustomSelect,
+  CustomSelect = CustomSelectComponent,
 }) {
   const [isModeOpen, setIsModeOpen] = useState(false);
   const [isFilterOpen, setIsFilterOpen] = useState(false);

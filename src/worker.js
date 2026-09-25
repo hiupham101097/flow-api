@@ -1656,7 +1656,7 @@ export default {
         const cacheKey = platform || 'all';
         const cached = filterCacheMap.get(cacheKey);
         if (cached && Date.now() - cached.at < FILTER_TTL_MS) {
-          return jsonResponse(cached.value);
+          return jsonResponse(cached.value, 200, 'public, max-age=30, stale-while-revalidate=60');
         }
 
         const dims = await loadDimensions(env.DB);

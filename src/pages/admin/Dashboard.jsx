@@ -5,247 +5,35 @@ import TelegramSettingsModal from '../../components/dashboard/TelegramSettingsMo
 import UserJourneyTimeline from '../../components/dashboard/UserJourneyTimeline';
 import SystemHealthSummary from '../../components/dashboard/SystemHealthSummary';
 import IssueManagementPanel from '../../components/dashboard/IssueManagementPanel';
+import ApiLogsPanel from '../../components/dashboard/ApiLogsPanel';
+import CrashlyticsPanel from '../../components/dashboard/CrashlyticsPanel';
+import EventsPanel from '../../components/dashboard/EventsPanel';
+import EventFunnelsPanel from '../../components/dashboard/EventFunnelsPanel';
 import SavedViews from '../../components/ui/SavedViews';
 import TelemetryControlBar from '../../components/dashboard/TelemetryControlBar';
+import CustomSelect from '../../components/ui/CustomSelect';
+import PaginationDock from '../../components/ui/PaginationDock';
 import { exportToCsv } from '../../utils/exportCsv';
 import { usePlatform } from '../../context/PlatformContext';
 import { API_MONITOR_URL } from '../../constants/api';
+import {
+  formatVietnamDate,
+  formatVietnamTime,
+  formatVietnamDateTime,
+  formatMs,
+  parseUtcDate,
+  parseJsonSafe,
+  formatJsonPretty,
+  getStatusMeta,
+  getSummarySnippet,
+  getCrashPlatform,
+  isItemWeb,
+  isDeviceWeb,
+  OUTCOME_COLORS,
+  RANGE_OPTIONS,
+} from '../../utils/format';
 
-// Nhận diện dữ liệu thuộc Web hay Mobile App
-function isItemWeb(item) {
-  if (!item) return false;
-  if (item.job_type === 'web') return true;
-  if (item.job_type === 'app') return false;
-
-  const dev = String(item.device_name || item.device_info || '').toLowerCase();
-  const app = String(item.app_identifier || '').toLowerCase();
-  const ep = String(item.endpoint || '').toLowerCase();
-  if (
-    dev.includes('chrome') ||
-    dev.includes('safari') ||
-    dev.includes('firefox') ||
-    dev.includes('edge') ||
-    dev.includes('browser') ||
-    dev.includes('trình duyệt') ||
-    dev.includes('windows') ||
-    dev.includes('macos') ||
-    app.includes('web') ||
-    app.includes('portal') ||
-    ep.includes('myportal')
-  ) {
-    return true;
-  }
-  return false;
-}
-
-// Phân biệt tên thiết bị thuộc Trình duyệt Web hay Điện thoại di động
-function isDeviceWeb(deviceName) {
-  if (!deviceName) return false;
-  const dev = String(deviceName).toLowerCase();
-  return (
-    dev.includes('chrome') ||
-    dev.includes('safari') ||
-    dev.includes('firefox') ||
-    dev.includes('edge') ||
-    dev.includes('browser') ||
-    dev.includes('trình duyệt') ||
-    dev.includes('windows') ||
-    dev.includes('macos') ||
-    dev.includes('linux') ||
-    dev.includes('opera') ||
-    dev.includes('web')
-  );
-}
-
-// Nhận diện chính xác nền tảng (Android / iOS / Web) của Crash Record
-export function getCrashPlatform(crash) {
-  if (!crash) return { key: 'unknown', name: 'Không rõ', icon: '📱', badgeClass: 'device-chip', label: '📱 Mobile' };
-  let raw = '';
-  if (crash.device_info) {
-    if (typeof crash.device_info === 'object') {
-      const p = String(crash.device_info.platform || '').toLowerCase();
-      const o = String(crash.device_info.os || '').toLowerCase();
-      if (p.includes('ios') || p.includes('apple') || p.includes('iphone') || o.includes('ios') || o.includes('apple') || o.includes('iphone')) {
-        return { key: 'ios', name: 'iOS', icon: '🍎', badgeClass: 'badge-ios', label: '🍎 iOS' };
-      }
-      if (p.includes('android') || o.includes('android')) {
-        return { key: 'android', name: 'Android', icon: '🤖', badgeClass: 'badge-android', label: '🤖 Android' };
-      }
-      raw = JSON.stringify(crash.device_info);
-    } else {
-      raw = String(crash.device_info);
-    }
-  }
-  const combined = `${crash.device_name || ''} ${raw} ${crash.error_message || ''} ${crash.stack_trace || ''}`.toLowerCase();
-  if (/iphone|ipad|ipod|ios|apple|runner\.app|\/var\/mobile|\.swift:\d+|\.m:\d+/i.test(combined)) {
-    return { key: 'ios', name: 'iOS', icon: '🍎', badgeClass: 'badge-ios', label: '🍎 iOS' };
-  }
-  if (/android|\.apk|\/data\/user|dalvik|art|samsung|pixel|xiaomi|oppo|vivo|realme|redmi|huawei|oneplus|\.java:\d+|\.kt:\d+/i.test(combined)) {
-    return { key: 'android', name: 'Android', icon: '🤖', badgeClass: 'badge-android', label: '🤖 Android' };
-  }
-  if (/web|chrome|firefox|safari|edge|browser/i.test(combined)) {
-    return { key: 'web', name: 'Web', icon: '🌐', badgeClass: 'badge-web', label: '🌐 Web' };
-  }
-  return { key: 'mobile', name: 'Mobile', icon: '📱', badgeClass: 'device-chip', label: '📱 Mobile' };
-}
-
-// Màu của từng nhóm kết quả, dùng chung cho cột chồng, chú giải và biểu đồ ngày
-const OUTCOME_COLORS = {
-  success_auto: 'var(--success)',
-  success_manual: 'var(--accent)',
-  failed: 'var(--danger)',
-  abandoned: 'var(--warning)',
-  open: 'var(--text-dim)',
-  other: 'var(--line-strong)',
-};
-
-const RANGE_OPTIONS = [
-  { value: 1, label: 'Hôm nay' },
-  { value: 7, label: '7 ngày qua' },
-  { value: 30, label: '30 ngày qua' },
-  { value: 90, label: '90 ngày qua' },
-];
-
-// Số dòng telemetry tối đa giữ trong bộ nhớ khi polling ghép dần
 const TELEMETRY_CAP = 300;
-
-const formatMs = (value) => {
-  if (value === null || value === undefined) return '—';
-  const ms = Number(value);
-  return ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10000 ? 0 : 1)}s` : `${ms}ms`;
-};
-
-// Chuẩn hóa timestamp SQLite UTC sang Date object
-function parseUtcDate(dateStr) {
-  if (!dateStr) return null;
-  // SQLite trả về: "YYYY-MM-DD HH:MM:SS" (không có T và Z)
-  // Chuẩn hóa thành ISO 8601 UTC để mọi trình duyệt hiểu đúng múi giờ UTC
-  const cleanStr = String(dateStr).trim();
-  const isoStr = cleanStr.includes('T')
-    ? (cleanStr.endsWith('Z') ? cleanStr : `${cleanStr}Z`)
-    : `${cleanStr.replace(' ', 'T')}Z`;
-  const d = new Date(isoStr);
-  return isNaN(d.getTime()) ? new Date(dateStr) : d;
-}
-
-// Luôn hiển thị chính xác theo Giờ Việt Nam (Asia/Ho_Chi_Minh - GMT+7), 24h
-function formatVietnamTime(dateStr) {
-  const d = parseUtcDate(dateStr);
-  if (!d || isNaN(d.getTime())) return '—';
-  return d.toLocaleTimeString('vi-VN', {
-    timeZone: 'Asia/Ho_Chi_Minh',
-    hour12: false,
-  });
-}
-
-function formatVietnamDate(dateStr) {
-  const d = parseUtcDate(dateStr);
-  if (!d || isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString('vi-VN', {
-    timeZone: 'Asia/Ho_Chi_Minh',
-  });
-}
-
-function formatVietnamDateTime(dateStr) {
-  const d = parseUtcDate(dateStr);
-  if (!d || isNaN(d.getTime())) return '—';
-  return `${d.toLocaleTimeString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour12: false })} - ${d.toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}`;
-}
-
-// Dropdown tuỳ chỉnh chạy thuần DOM - không tạo Win32 HWND popup riêng của Windows,
-// giải quyết triệt để lỗi dropdown không mở / không tương tác được trên WinForms WebView
-function CustomSelect({
-  value,
-  onChange,
-  options = [],
-  className = '',
-  ariaLabel = '',
-  placeholder = 'Chọn...',
-  alignRight = false,
-}) {
-  const [isOpen, setIsOpen] = useState(false);
-  const containerRef = useRef(null);
-
-  useEffect(() => {
-    function handleClickOutside(event) {
-      if (containerRef.current && !containerRef.current.contains(event.target)) {
-        setIsOpen(false);
-      }
-    }
-    function handleKeyDown(event) {
-      if (event.key === 'Escape') setIsOpen(false);
-    }
-    if (isOpen) {
-      // Dùng pointerdown thay cho mousedown để tương thích tối đa với WinForms WebView2
-      document.addEventListener('pointerdown', handleClickOutside);
-      document.addEventListener('keydown', handleKeyDown);
-    }
-    return () => {
-      document.removeEventListener('pointerdown', handleClickOutside);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isOpen]);
-
-  const selectedOption = options.find((opt) => String(opt.value) === String(value)) || options[0];
-
-  return (
-    <div className={`custom-select-container ${className}`} ref={containerRef}>
-      <button
-        type="button"
-        className="custom-select-trigger"
-        onClick={(e) => {
-          e.stopPropagation();
-          setIsOpen((prev) => !prev);
-        }}
-        aria-expanded={isOpen}
-        aria-label={ariaLabel}
-      >
-        <span className="custom-select-label">
-          {selectedOption ? selectedOption.label : placeholder}
-        </span>
-        <span className={`custom-select-arrow ${isOpen ? 'open' : ''}`}>▾</span>
-      </button>
-
-      {isOpen && (
-        <div className={`custom-select-menu ${alignRight ? 'align-right' : ''}`} role="listbox">
-          {options.length === 0 ? (
-            <div style={{ padding: '0.45rem 0.65rem', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-              Không có lựa chọn
-            </div>
-          ) : (
-            options.map((opt) => {
-              const isSelected = String(opt.value) === String(value);
-              return (
-                <button
-                  key={String(opt.value)}
-                  type="button"
-                  role="option"
-                  aria-selected={isSelected}
-                  className={`custom-select-option ${isSelected ? 'selected' : ''}`}
-                  onMouseDown={(e) => {
-                    // Xử lý trực tiếp trên MouseDown để ngăn chặn race-condition với document click
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onChange(opt.value);
-                    setIsOpen(false);
-                  }}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onChange(opt.value);
-                    setIsOpen(false);
-                  }}
-                >
-                  {opt.label}
-                </button>
-              );
-            })
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function CodeBlock({ label, value, copyKey, copiedItem, onCopy }) {
   return (
@@ -266,13 +54,10 @@ function hasTelemetryArrayChanged(prev, next) {
   if (!Array.isArray(next)) return false;
   if (!Array.isArray(prev) || prev.length !== next.length) return true;
   if (next.length === 0) return false;
-  // So sánh phần tử đầu tiên (mới nhất) và ID để tránh render thừa
   return prev[0]?.id !== next[0]?.id || prev[0]?.created_at !== next[0]?.created_at;
 }
 
-// Chuẩn hoá mọi giá trị về chuỗi thường trước khi so khớp tìm kiếm.
-// D1 có thể trả về số (hoặc null) cho các cột khai báo TEXT — gọi thẳng
-// .toLowerCase() trên các giá trị đó sẽ ném TypeError và làm chết ô tìm kiếm.
+// Chuẩn hoá mọi giá trị về chuỗi thường trước khi so khớp tìm kiếm
 function toSearchText(value) {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value.toLowerCase();
@@ -284,82 +69,6 @@ function toSearchText(value) {
     }
   }
   return String(value).toLowerCase();
-}
-
-// Component phân trang tối ưu bộ nhớ DOM cho WebView
-function PaginationDock({ currentPage, totalItems, pageSize, onPageChange, onPageSizeChange }) {
-  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-  const startItem = totalItems === 0 ? 0 : (currentPage - 1) * pageSize + 1;
-  const endItem = Math.min(totalItems, currentPage * pageSize);
-
-  if (totalItems <= 0) return null;
-
-  return (
-    <div className="pagination-dock">
-      <div className="pagination-info">
-        <span>Hiển thị <strong>{startItem} - {endItem}</strong> / <strong>{totalItems}</strong> mục</span>
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', marginLeft: '0.65rem' }}>
-          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Mỗi trang:</span>
-          <CustomSelect
-            className="select-pagination"
-            value={pageSize}
-            onChange={(val) => onPageSizeChange(Number(val))}
-            options={[
-              { value: 10, label: '10' },
-              { value: 20, label: '20' },
-              { value: 50, label: '50' },
-              { value: 100, label: '100' },
-            ]}
-            ariaLabel="Số dòng mỗi trang"
-          />
-        </div>
-      </div>
-
-      <div className="pagination-nav">
-        <button
-          type="button"
-          className="pagination-btn"
-          disabled={currentPage <= 1}
-          onClick={() => onPageChange(1)}
-          title="Trang đầu"
-        >
-          «
-        </button>
-        <button
-          type="button"
-          className="pagination-btn"
-          disabled={currentPage <= 1}
-          onClick={() => onPageChange(currentPage - 1)}
-          title="Trang trước"
-        >
-          ‹
-        </button>
-
-        <span style={{ margin: '0 0.5rem', fontWeight: 600, fontSize: '0.82rem' }}>
-          {currentPage} / {totalPages}
-        </span>
-
-        <button
-          type="button"
-          className="pagination-btn"
-          disabled={currentPage >= totalPages}
-          onClick={() => onPageChange(currentPage + 1)}
-          title="Trang tiếp"
-        >
-          ›
-        </button>
-        <button
-          type="button"
-          className="pagination-btn"
-          disabled={currentPage >= totalPages}
-          onClick={() => onPageChange(totalPages)}
-          title="Trang cuối"
-        >
-          »
-        </button>
-      </div>
-    </div>
-  );
 }
 
 const MODE_TO_PATH = {
@@ -416,6 +125,14 @@ function Dashboard() {
   const [eventTab, setEventTab] = useState(searchParams.get('type') || 'all');   // for analytics: 'all', 'custom', 'screen_view'
 
   const [searchTerm, setSearchTerm] = useState(searchParams.get('q') || '');
+  const [debouncedSearch, setDebouncedSearch] = useState(searchTerm);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearch(searchTerm);
+    }, 280);
+    return () => clearTimeout(handler);
+  }, [searchTerm]);
 
   // Pagination states (Mặc định 20 dòng để Mobile WebView mượt tuyệt đối)
   const [logsPage, setLogsPage] = useState(1);
@@ -834,15 +551,15 @@ function Dashboard() {
   // Reset trang về 1 khi đổi bộ lọc hoặc từ khóa tìm kiếm
   useEffect(() => {
     setLogsPage(1);
-  }, [activeTab, searchTerm, selectedFilter, deviceFilter, userFilter]);
+  }, [activeTab, debouncedSearch, selectedFilter, deviceFilter, userFilter]);
 
   useEffect(() => {
     setCrashPage(1);
-  }, [crashTab, searchTerm, selectedFilter, deviceFilter, userFilter]);
+  }, [crashTab, debouncedSearch, selectedFilter, deviceFilter, userFilter]);
 
   useEffect(() => {
     setEventPage(1);
-  }, [eventTab, searchTerm, selectedFilter, deviceFilter, userFilter]);
+  }, [eventTab, debouncedSearch, selectedFilter, deviceFilter, userFilter]);
 
   // Escape to close any open modal
   useEffect(() => {
@@ -1459,8 +1176,8 @@ export const appConfig: ApplicationConfig = {
       if (deviceFilter !== 'all' && log.device_name !== deviceFilter) return false;
       if (userFilter !== 'all' && log.user_name !== userFilter) return false;
 
-      if (!searchTerm) return true;
-      const lowerSearch = searchTerm.toLowerCase();
+      if (!debouncedSearch) return true;
+      const lowerSearch = debouncedSearch.toLowerCase();
       const endpointMatch = toSearchText(log.endpoint).includes(lowerSearch);
       const statusMatch = toSearchText(log.status_code).includes(lowerSearch);
       const errorMatch = toSearchText(log.error_message).includes(lowerSearch);
@@ -1472,7 +1189,7 @@ export const appConfig: ApplicationConfig = {
 
       return endpointMatch || statusMatch || errorMatch || appMatch || userMatch || jobMatch || deviceMatch || ipMatch;
     });
-  }, [scopedLogs, activeTab, searchTerm, deviceFilter, userFilter]);
+  }, [scopedLogs, activeTab, debouncedSearch, deviceFilter, userFilter]);
 
   // Filter and search Crashes
   const filteredCrashes = useMemo(() => {
@@ -1489,8 +1206,8 @@ export const appConfig: ApplicationConfig = {
       }
       if (userFilter !== 'all' && crash.user_name !== userFilter) return false;
 
-      if (!searchTerm) return true;
-      const lower = searchTerm.toLowerCase();
+      if (!debouncedSearch) return true;
+      const lower = debouncedSearch.toLowerCase();
       const msgMatch = toSearchText(crash.error_message).includes(lower);
       const stackMatch = toSearchText(crash.stack_trace).includes(lower);
       const appMatch = toSearchText(crash.app_identifier).includes(lower);
@@ -1501,7 +1218,7 @@ export const appConfig: ApplicationConfig = {
 
       return msgMatch || stackMatch || appMatch || userMatch || jobMatch || deviceMatch || osMatch;
     });
-  }, [scopedCrashes, crashTab, searchTerm, deviceFilter, userFilter]);
+  }, [scopedCrashes, crashTab, debouncedSearch, deviceFilter, userFilter]);
 
   // Filter and search Analytics
   const filteredEvents = useMemo(() => {
@@ -1518,8 +1235,8 @@ export const appConfig: ApplicationConfig = {
         if (String(event.user_name ?? '') !== userFilter && String(event.user_id ?? '') !== userFilter) return false;
       }
 
-      if (!searchTerm) return true;
-      const lower = searchTerm.toLowerCase();
+      if (!debouncedSearch) return true;
+      const lower = debouncedSearch.toLowerCase();
       const nameMatch = toSearchText(event.event_name).includes(lower);
       const screenMatch = toSearchText(event.screen_name).includes(lower);
       const userMatch = toSearchText(event.user_id).includes(lower) || toSearchText(event.user_name).includes(lower);
@@ -1529,7 +1246,7 @@ export const appConfig: ApplicationConfig = {
 
       return nameMatch || screenMatch || userMatch || appMatch || jobMatch || paramMatch;
     });
-  }, [scopedEvents, eventTab, searchTerm, deviceFilter, userFilter]);
+  }, [scopedEvents, eventTab, debouncedSearch, deviceFilter, userFilter]);
 
   // Sliced data cho phân trang (Cắt nhỏ danh sách hiển thị, tăng tốc 60 FPS cho WebView)
   const paginatedLogs = useMemo(() => {
@@ -2084,1058 +1801,113 @@ export const appConfig: ApplicationConfig = {
 
       {/* MODE 1: LOGS PANEL */}
       {telemetryMode === 'logs' && (
-        <section className="log-panel" aria-labelledby="telemetry-log-title">
-          <div className="log-panel-header">
-            <div className="log-title-group">
-              <h2 id="telemetry-log-title">Nhật ký API Telemetry</h2>
-              <span className="count-pill">{filteredLogs.length} yêu cầu</span>
-            </div>
-
-            <div className="log-controls">
-              <div className="filter-tabs" role="tablist" aria-label="Lọc trạng thái HTTP">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === 'all'}
-                  className={`filter-tab ${activeTab === 'all' ? 'active' : ''}`}
-                  onClick={() => { setActiveTab('all'); setMonitorQuery({ status: null }); }}
-                >
-                  Tất cả <span className="tab-count">{totalCalls}</span>
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === '200'}
-                  className={`filter-tab tab-success ${activeTab === '200' ? 'active' : ''}`}
-                  onClick={() => { setActiveTab('200'); setMonitorQuery({ status: '200' }); }}
-                >
-                  <span className="dot dot-success" /> 200 OK <span className="tab-count">{count200}</span>
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === '400'}
-                  className={`filter-tab tab-warning ${activeTab === '400' ? 'active' : ''}`}
-                  onClick={() => { setActiveTab('400'); setMonitorQuery({ status: '400' }); }}
-                >
-                  <span className="dot dot-warning" /> 4xx Lỗi Client <span className="tab-count">{count400}</span>
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === '500'}
-                  className={`filter-tab tab-danger ${activeTab === '500' ? 'active' : ''}`}
-                  onClick={() => { setActiveTab('500'); setMonitorQuery({ status: '500' }); }}
-                >
-                  <span className="dot dot-danger" /> 5xx Lỗi Server <span className="tab-count">{count500}</span>
-                </button>
-              </div>
-
-              <CustomSelect
-                className="select-mini"
-                value={deviceFilter}
-                onChange={handleDeviceChange}
-                options={[
-                  {
-                    value: 'all',
-                    label: platformScope === 'web'
-                      ? `🌐 Tất cả trình duyệt ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}`
-                      : `📱 Tất cả thiết bị ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}`,
-                  },
-                  ...uniqueDevices.map((d) => ({
-                    value: d,
-                    label: `${platformScope === 'web' ? '🌐' : '📱'} ${d}`,
-                  })),
-                ]}
-                ariaLabel={platformScope === 'web' ? 'Lọc theo trình duyệt' : 'Lọc theo thiết bị'}
-              />
-
-              <CustomSelect
-                className="select-mini"
-                value={userFilter}
-                onChange={handleUserChange}
-                options={[
-                  {
-                    value: 'all',
-                    label: platformScope === 'web'
-                      ? `👤 Tất cả user web ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}`
-                      : `👤 Tất cả user ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}`,
-                  },
-                  ...uniqueUsers.map((u) => ({ value: u, label: `👤 ${u}` })),
-                ]}
-                ariaLabel={platformScope === 'web' ? 'Lọc theo người dùng web' : 'Lọc theo người dùng'}
-              />
-
-              <label className="search-field">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <circle cx="11" cy="11" r="6" />
-                  <path d="m16 16 4 4" />
-                </svg>
-                <span className="sr-only">Tìm kiếm logs</span>
-                <input
-                  type="search"
-                  placeholder="Tìm theo Tên, Thiết bị, IP máy, URL..."
-                  value={searchTerm}
-                  onChange={(event) => setSearchTerm(event.target.value)}
-                />
-              </label>
-
-              <button
-                type="button"
-                className="secondary-btn"
-                style={{ padding: '0.45rem 0.8rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
-                onClick={() => exportToCsv('logs', filteredLogs)}
-                title="Xuất danh sách API Logs đang xem ra file CSV"
-              >
-                📥 Xuất CSV
-              </button>
-            </div>
-          </div>
-
-          {error && (
-            <div className="error-banner" role="alert">
-              <span>Không thể kết nối lấy telemetry: {error}</span>
-              <button type="button" onClick={() => fetchAllTelemetry()}>Thử lại</button>
-            </div>
-          )}
-
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th style={{ width: '120px' }}>Thời gian</th>
-                  <th style={{ width: '22%' }}>Mục tiêu (Job / User)</th>
-                  <th style={{ width: '8%' }}>Method</th>
-                  <th>Endpoint</th>
-                  <th style={{ width: '80px' }}>Trạng thái</th>
-                  <th style={{ width: '22%' }}>Dữ liệu / Lỗi tóm tắt</th>
-                  <th style={{ width: '75px' }}>Độ trễ</th>
-                  <th style={{ width: '80px' }}><span className="sr-only">Thao tác</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading && logs.length === 0 && (
-                  <tr><td colSpan="8" className="table-message">Đang kết nối nhận telemetry…</td></tr>
-                )}
-
-                {filteredLogs.length === 0 && !loading && (
-                  <tr>
-                    <td colSpan="8">
-                      <div className="empty-state">
-                        <h3>{logs.length === 0 ? 'Chưa có telemetry nào' : 'Không tìm thấy request phù hợp'}</h3>
-                        <p>
-                          {logs.length === 0
-                            ? 'Kết nối client Mobile hoặc Web để theo dõi các lệnh gọi API theo thời gian thực.'
-                            : 'Thử tìm kiếm với từ khóa khác hoặc xóa bộ lọc.'}
-                        </p>
-                      </div>
-                    </td>
-                  </tr>
-                )}
-
-                {paginatedLogs.map((log) => {
-                  const statusMeta = getStatusMeta(log.status_code);
-                  const summaryText = getSummarySnippet(log);
-                  const isApp = log.job_type === 'app';
-
-                  return (
-                    <tr
-                      key={log.id}
-                      data-monitor-row
-                      tabIndex={0}
-                      className={statusMeta.type !== '200' ? 'row-error' : ''}
-                      onClick={() => openDetail('log', log, setSelectedLog)}
-                      style={{ cursor: 'pointer' }}
-                      title="Nhấn để xem chi tiết"
-                    >
-                      <td className="timestamp-cell" style={{ whiteSpace: 'nowrap', fontSize: '0.78rem', lineHeight: 1.4 }}>
-                        <div>{formatVietnamDate(log.created_at)}</div>
-                        <div style={{ color: 'var(--text-dim)', fontWeight: 600 }}>{formatVietnamTime(log.created_at)}</div>
-                      </td>
-                      <td>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.28rem' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
-                            <span className={`type-badge ${isApp ? 'type-badge-app' : 'type-badge-web'}`} style={{ width: 'fit-content', fontSize: '0.72rem' }}>
-                              {isApp ? '📱' : '🌐'} {log.job_name || log.app_identifier || 'App'}
-                            </span>
-                            {log.user_name ? (
-                              <span
-                                className="user-tag"
-                                style={{ fontSize: '0.72rem', cursor: 'pointer', padding: '0.1rem 0.35rem' }}
-                                title="Nhấp để lọc theo người dùng này"
-                                onClick={(e) => { e.stopPropagation(); setSearchTerm(log.user_name); }}
-                              >
-                                👤 {log.user_name}
-                              </span>
-                            ) : null}
-                          </div>
-
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap', fontSize: '0.72rem', color: 'var(--text-dim)' }}>
-                            <span
-                              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', cursor: 'pointer' }}
-                              title="Nhấp để lọc theo thiết bị"
-                              onClick={(e) => { e.stopPropagation(); setSearchTerm(log.device_name || ''); }}
-                            >
-                              <span>📱</span>
-                              <strong style={{ color: 'var(--text-muted)' }}>
-                                {log.device_name || (isApp ? 'Thiết bị di động' : 'Trình duyệt Web')}
-                              </strong>
-                            </span>
-
-                            {log.ip_address ? (
-                              <span
-                                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', cursor: 'pointer', opacity: 0.85 }}
-                                title="Nhấp để lọc theo IP này"
-                                onClick={(e) => { e.stopPropagation(); setSearchTerm(log.ip_address); }}
-                              >
-                                <span>🌐</span>
-                                <code>{log.ip_address}</code>
-                              </span>
-                            ) : null}
-                          </div>
-                        </div>
-                      </td>
-                      <td>
-                        <span className={`method-badge ${(log.method || '').toLowerCase()}`}>
-                          {log.method}
-                        </span>
-                      </td>
-                      <td style={{ fontSize: '0.78rem', color: 'var(--text-muted)', wordBreak: 'break-all', maxWidth: '240px' }}>
-                        {log.endpoint}
-                      </td>
-                      <td>
-                        <span className={`status-badge ${statusMeta.badgeClass}`}>
-                          {log.status_code || 0}
-                        </span>
-                      </td>
-                      <td className="summary-cell" title={summaryText} style={{ fontSize: '0.78rem' }}>
-                        <span className={`summary-pill ${statusMeta.pillClass}`}>
-                          {summaryText}
-                        </span>
-                      </td>
-                      <td className="duration-cell">{log.duration_ms || 0} ms</td>
-                      <td className="action-cell" style={{ display: 'flex', gap: '0.35rem', justifyContent: 'flex-end' }}>
-                        <button
-                          type="button"
-                          className="view-btn"
-                          style={{ fontSize: '0.72rem', padding: '0.25rem 0.45rem', background: 'rgba(125, 156, 255, 0.12)', color: 'var(--accent)' }}
-                          title="Xem toàn bộ hành trình của User / Thiết bị này"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            viewUserTimeline({
-                              user: log.user_name || '',
-                              device: log.device_name || '',
-                              app: log.app_identifier || '',
-                            });
-                          }}
-                        >
-                          🐾
-                        </button>
-                        <button
-                          type="button"
-                          className="view-btn"
-                          style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            openDetail('log', log, setSelectedLog);
-                          }}
-                        >
-                          Chi tiết
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          <PaginationDock
-            currentPage={logsPage}
-            totalItems={filteredLogs.length}
-            pageSize={logsPageSize}
-            onPageChange={setLogsPage}
-            onPageSizeChange={(newSize) => { setLogsPageSize(newSize); setLogsPage(1); setMonitorQuery({ size: newSize }); }}
-          />
-        </section>
+        <ApiLogsPanel
+          logs={logs}
+          filteredLogs={filteredLogs}
+          paginatedLogs={paginatedLogs}
+          loading={loading}
+          totalCalls={totalCalls}
+          count200={count200}
+          count400={count400}
+          count500={count500}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          setMonitorQuery={setMonitorQuery}
+          deviceFilter={deviceFilter}
+          handleDeviceChange={handleDeviceChange}
+          uniqueDevices={uniqueDevices}
+          userFilter={userFilter}
+          handleUserChange={handleUserChange}
+          uniqueUsers={uniqueUsers}
+          platformScope={platformScope}
+          searchTerm={searchTerm}
+          setSearchTerm={setSearchTerm}
+          logsPage={logsPage}
+          setLogsPage={setLogsPage}
+          logsPageSize={logsPageSize}
+          setLogsPageSize={setLogsPageSize}
+          onOpenDetail={openDetail}
+          viewUserTimeline={viewUserTimeline}
+        />
       )}
 
       {/* MODE 2: CRASHLYTICS PANEL */}
       {telemetryMode === 'crashes' && (
-        <section className="log-panel" aria-labelledby="crashlytics-log-title">
-          <div className="log-panel-header">
-            <div className="log-title-group">
-              <h2 id="crashlytics-log-title">Nhật ký sự cố & Crashlytics</h2>
-              <span className="count-pill">{filteredCrashes.length} sự cố</span>
-            </div>
-
-            <div className="log-controls">
-              <div className="filter-tabs" role="tablist" aria-label="Lọc mức độ và nền tảng crash">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={crashTab === 'all'}
-                  className={`filter-tab ${crashTab === 'all' ? 'active' : ''}`}
-                  onClick={() => { setCrashTab('all'); setMonitorQuery({ severity: null }); }}
-                >
-                  Tất cả <span className="tab-count">{totalCrashes}</span>
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={crashTab === 'android'}
-                  className={`filter-tab ${crashTab === 'android' ? 'active' : ''}`}
-                  style={{ color: crashTab === 'android' ? '#4ade80' : undefined }}
-                  onClick={() => { setCrashTab('android'); setMonitorQuery({ severity: 'android' }); }}
-                  title="Chỉ lọc sự cố trên hệ điều hành Android"
-                >
-                  🤖 Android <span className="tab-count">{androidCrashes}</span>
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={crashTab === 'ios'}
-                  className={`filter-tab ${crashTab === 'ios' ? 'active' : ''}`}
-                  style={{ color: crashTab === 'ios' ? '#38bdf8' : undefined }}
-                  onClick={() => { setCrashTab('ios'); setMonitorQuery({ severity: 'ios' }); }}
-                  title="Chỉ lọc sự cố trên hệ điều hành iOS"
-                >
-                  🍎 iOS <span className="tab-count">{iosCrashes}</span>
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={crashTab === 'fatal'}
-                  className={`filter-tab tab-danger ${crashTab === 'fatal' ? 'active' : ''}`}
-                  onClick={() => { setCrashTab('fatal'); setMonitorQuery({ severity: 'fatal' }); }}
-                >
-                  <span className="dot dot-danger" /> {platformScope === 'web' ? 'Fatal (Lỗi Runtime)' : 'Fatal (Sập App)'} <span className="tab-count">{fatalCrashes}</span>
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={crashTab === 'non-fatal'}
-                  className={`filter-tab tab-warning ${crashTab === 'non-fatal' ? 'active' : ''}`}
-                  onClick={() => { setCrashTab('non-fatal'); setMonitorQuery({ severity: 'non-fatal' }); }}
-                >
-                  <span className="dot dot-warning" /> {platformScope === 'web' ? 'Non-fatal (Cảnh báo)' : 'Non-fatal (Ngoại lệ)'} <span className="tab-count">{nonFatalCrashes}</span>
-                </button>
-              </div>
-
-              <CustomSelect
-                className="select-mini"
-                value={deviceFilter}
-                onChange={handleDeviceChange}
-                options={[
-                  {
-                    value: 'all',
-                    label: platformScope === 'web'
-                      ? `🌐 Tất cả trình duyệt ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}`
-                      : `📱 Tất cả thiết bị ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}`,
-                  },
-                  ...uniqueDevices.map((d) => ({
-                    value: d,
-                    label: `${platformScope === 'web' ? '🌐' : '📱'} ${d}`,
-                  })),
-                ]}
-                ariaLabel={platformScope === 'web' ? 'Lọc theo trình duyệt' : 'Lọc theo thiết bị'}
-              />
-
-              <CustomSelect
-                className="select-mini"
-                value={userFilter}
-                onChange={handleUserChange}
-                options={[
-                  {
-                    value: 'all',
-                    label: platformScope === 'web'
-                      ? `👤 Tất cả user web ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}`
-                      : `👤 Tất cả user ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}`,
-                  },
-                  ...uniqueUsers.map((u) => ({ value: u, label: `👤 ${u}` })),
-                ]}
-                ariaLabel={platformScope === 'web' ? 'Lọc theo người dùng web' : 'Lọc theo người dùng'}
-              />
-
-              <label className="search-field">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <circle cx="11" cy="11" r="6" />
-                  <path d="m16 16 4 4" />
-                </svg>
-                <span className="sr-only">Tìm kiếm crash</span>
-                <input
-                  type="search"
-                  placeholder="Tìm lỗi, stack trace, app ID..."
-                  value={searchTerm}
-                  onChange={(event) => setSearchTerm(event.target.value)}
-                />
-              </label>
-
-              <button
-                type="button"
-                className="secondary-btn"
-                style={{ padding: '0.45rem 0.8rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
-                onClick={() => exportToCsv('crashes', filteredCrashes)}
-                title="Xuất danh sách Crashes đang xem ra file CSV"
-              >
-                📥 Xuất CSV
-              </button>
-            </div>
-          </div>
-
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th style={{ width: '130px' }}>Thời gian</th>
-                  <th style={{ width: '22%' }}>Mục tiêu (Job / App ID)</th>
-                  <th style={{ width: '110px' }}>Mức độ</th>
-                  <th>Ngoại lệ & Tiêu đề lỗi</th>
-                  <th style={{ width: '180px' }}>Thiết bị / OS</th>
-                  <th style={{ width: '80px' }}><span className="sr-only">Thao tác</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading && crashes.length === 0 && (
-                  <tr><td colSpan="6" className="table-message">Đang kết nối lấy dữ liệu crash…</td></tr>
-                )}
-
-                {filteredCrashes.length === 0 && !loading && (
-                  <tr>
-                    <td colSpan="6">
-                      <div className="empty-state">
-                        <h3>{crashes.length === 0 ? 'Tuyệt vời! Không có sự cố crash nào' : 'Không tìm thấy crash phù hợp'}</h3>
-                        <p>
-                          {crashes.length === 0
-                            ? 'Hệ thống ứng dụng hoạt động ổn định và chưa ghi nhận bất kỳ ngoại lệ nào.'
-                            : 'Thử tìm kiếm với từ khóa khác hoặc chuyển tab lọc.'}
-                        </p>
-                      </div>
-                    </td>
-                  </tr>
-                )}
-
-                {paginatedCrashes.map((crash) => {
-                  const isFatal = Number(crash.is_fatal) === 1;
-                  const deviceInfoParsed = parseJsonSafe(crash.device_info);
-
-                  return (
-                    <tr
-                      key={crash.id}
-                      data-monitor-row
-                      tabIndex={0}
-                      className={isFatal ? 'row-error' : ''}
-                      onClick={() => openDetail('crash', crash, setSelectedCrash)}
-                      style={{ cursor: 'pointer' }}
-                      title="Nhấn để xem chi tiết & Stack Trace"
-                    >
-                      <td className="timestamp-cell" style={{ whiteSpace: 'nowrap', fontSize: '0.78rem', lineHeight: 1.4 }}>
-                        <div>{formatVietnamDate(crash.created_at)}</div>
-                        <div style={{ color: 'var(--text-dim)', fontWeight: 600 }}>{formatVietnamTime(crash.created_at)}</div>
-                      </td>
-                      <td>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                          <span className="type-badge type-badge-app" style={{ width: 'fit-content', fontSize: '0.72rem' }}>
-                            📱 {crash.job_name || crash.app_identifier || 'Mobile App'}
-                          </span>
-                          <small style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>
-                            {crash.app_identifier ? `<code>${crash.app_identifier}</code>` : '-'}
-                          </small>
-                        </div>
-                      </td>
-                      <td>
-                        {isFatal ? (
-                          <span className="badge-fatal">💥 FATAL</span>
-                        ) : (
-                          <span className="badge-non-fatal">⚠️ Non-fatal</span>
-                        )}
-                      </td>
-                      <td style={{ fontSize: '0.82rem', fontWeight: 500, color: isFatal ? '#ff7785' : 'var(--text)', wordBreak: 'break-word', maxWidth: '340px' }}>
-                        {crash.error_message}
-                      </td>
-                      <td>
-                        {(() => {
-                          const osInfo = getCrashPlatform(crash);
-                          return (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', alignItems: 'center' }}>
-                                <span className={osInfo.badgeClass}>{osInfo.label}</span>
-                                {deviceInfoParsed && typeof deviceInfoParsed === 'object' && (deviceInfoParsed.model || deviceInfoParsed.device_name) && (
-                                  <span className="device-chip">{deviceInfoParsed.model || deviceInfoParsed.device_name}</span>
-                                )}
-                              </div>
-                              {deviceInfoParsed && typeof deviceInfoParsed === 'object' && deviceInfoParsed.os_version && (
-                                <small style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>
-                                  OS v{deviceInfoParsed.os_version}
-                                </small>
-                              )}
-                            </div>
-                          );
-                        })()}
-                      </td>
-                      <td className="action-cell" style={{ display: 'flex', gap: '0.35rem', justifyContent: 'flex-end' }}>
-                        <button
-                          type="button"
-                          className="view-btn"
-                          style={{ fontSize: '0.72rem', padding: '0.25rem 0.45rem', background: 'rgba(125, 156, 255, 0.12)', color: 'var(--accent)' }}
-                          title="Xem toàn bộ hành trình trước khi xảy ra sự cố này"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            viewUserTimeline({
-                              user: crash.user_name || '',
-                              device: (typeof deviceInfoParsed === 'object' ? deviceInfoParsed.model || deviceInfoParsed.device_name : '') || '',
-                              app: crash.app_identifier || '',
-                            });
-                          }}
-                        >
-                          🐾
-                        </button>
-                        <button
-                          type="button"
-                          className="view-btn"
-                          style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            openDetail('crash', crash, setSelectedCrash);
-                          }}
-                        >
-                          Stack Trace
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          <PaginationDock
-            currentPage={crashPage}
-            totalItems={filteredCrashes.length}
-            pageSize={crashPageSize}
-            onPageChange={setCrashPage}
-            onPageSizeChange={(newSize) => { setCrashPageSize(newSize); setCrashPage(1); setMonitorQuery({ size: newSize }); }}
-          />
-        </section>
+        <CrashlyticsPanel
+          crashes={crashes}
+          filteredCrashes={filteredCrashes}
+          paginatedCrashes={paginatedCrashes}
+          loading={loading}
+          totalCrashes={totalCrashes}
+          androidCrashes={androidCrashes}
+          iosCrashes={iosCrashes}
+          fatalCrashes={fatalCrashes}
+          nonFatalCrashes={nonFatalCrashes}
+          crashTab={crashTab}
+          setCrashTab={setCrashTab}
+          setMonitorQuery={setMonitorQuery}
+          deviceFilter={deviceFilter}
+          handleDeviceChange={handleDeviceChange}
+          uniqueDevices={uniqueDevices}
+          userFilter={userFilter}
+          handleUserChange={handleUserChange}
+          uniqueUsers={uniqueUsers}
+          platformScope={platformScope}
+          searchTerm={searchTerm}
+          setSearchTerm={setSearchTerm}
+          crashPage={crashPage}
+          setCrashPage={setCrashPage}
+          crashPageSize={crashPageSize}
+          setCrashPageSize={setCrashPageSize}
+          onOpenDetail={openDetail}
+          viewUserTimeline={viewUserTimeline}
+        />
       )}
 
       {/* MODE 3: ANALYTICS PANEL */}
       {telemetryMode === 'analytics' && (
-        <section className="log-panel" aria-labelledby="analytics-log-title">
-          <div className="log-panel-header">
-            <div className="log-title-group">
-              <h2 id="analytics-log-title">Nhật ký sự kiện Analytics & Luồng màn hình</h2>
-              <span className="count-pill">{filteredEvents.length} sự kiện</span>
-            </div>
-
-            <div className="log-controls">
-              <div className="filter-tabs" role="tablist" aria-label="Lọc loại sự kiện">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={eventTab === 'all'}
-                  className={`filter-tab ${eventTab === 'all' ? 'active' : ''}`}
-                  onClick={() => { setEventTab('all'); setMonitorQuery({ type: null }); }}
-                >
-                  Tất cả <span className="tab-count">{totalEvents}</span>
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={eventTab === 'custom'}
-                  className={`filter-tab tab-accent ${eventTab === 'custom' ? 'active' : ''}`}
-                  onClick={() => { setEventTab('custom'); setMonitorQuery({ type: 'custom' }); }}
-                >
-                  ⚡ Custom Events <span className="tab-count">{customEventCount}</span>
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={eventTab === 'screen_view'}
-                  className={`filter-tab tab-success ${eventTab === 'screen_view' ? 'active' : ''}`}
-                  onClick={() => { setEventTab('screen_view'); setMonitorQuery({ type: 'screen_view' }); }}
-                >
-                  {platformScope === 'web' ? '🌐 Route / Page Views' : '📱 Screen Views'} <span className="tab-count">{screenViewCount}</span>
-                </button>
-              </div>
-
-              <CustomSelect
-                className="select-mini"
-                value={deviceFilter}
-                onChange={handleDeviceChange}
-                options={[
-                  {
-                    value: 'all',
-                    label: platformScope === 'web'
-                      ? `🌐 Tất cả trình duyệt ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}`
-                      : `📱 Tất cả thiết bị ${uniqueDevices.length > 0 ? `(${uniqueDevices.length})` : ''}`,
-                  },
-                  ...uniqueDevices.map((d) => ({
-                    value: d,
-                    label: `${platformScope === 'web' ? '🌐' : '📱'} ${d}`,
-                  })),
-                ]}
-                ariaLabel={platformScope === 'web' ? 'Lọc theo trình duyệt' : 'Lọc theo thiết bị'}
-              />
-
-              <CustomSelect
-                className="select-mini"
-                value={userFilter}
-                onChange={handleUserChange}
-                options={[
-                  {
-                    value: 'all',
-                    label: platformScope === 'web'
-                      ? `👤 Tất cả user web ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}`
-                      : `👤 Tất cả user ${uniqueUsers.length > 0 ? `(${uniqueUsers.length})` : ''}`,
-                  },
-                  ...uniqueUsers.map((u) => ({ value: u, label: `👤 ${u}` })),
-                ]}
-                ariaLabel={platformScope === 'web' ? 'Lọc theo người dùng web' : 'Lọc theo người dùng'}
-              />
-
-              <label className="search-field">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <circle cx="11" cy="11" r="6" />
-                  <path d="m16 16 4 4" />
-                </svg>
-                <span className="sr-only">Tìm kiếm sự kiện</span>
-                <input
-                  type="search"
-                  placeholder="Tìm tên sự kiện, màn hình, user ID..."
-                  value={searchTerm}
-                  onChange={(event) => setSearchTerm(event.target.value)}
-                />
-              </label>
-
-              <button
-                type="button"
-                className="secondary-btn"
-                style={{ padding: '0.45rem 0.8rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
-                onClick={() => exportToCsv('events', filteredEvents)}
-                title="Xuất danh sách Analytics Events đang xem ra file CSV"
-              >
-                📥 Xuất CSV
-              </button>
-            </div>
-          </div>
-
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th style={{ width: '130px' }}>Thời gian</th>
-                  <th style={{ width: '20%' }}>Mục tiêu (Job / App)</th>
-                  <th style={{ width: '20%' }}>Tên sự kiện (Event)</th>
-                  <th style={{ width: '16%' }}>Màn hình (Screen)</th>
-                  <th style={{ width: '14%' }}>Người dùng (User ID)</th>
-                  <th className="parameters-column">Tham số (Parameters)</th>
-                  <th className="events-actions-column"><span className="sr-only">Thao tác</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading && events.length === 0 && (
-                  <tr><td colSpan="7" className="table-message">Đang kết nối lấy dữ liệu Analytics…</td></tr>
-                )}
-
-                {filteredEvents.length === 0 && !loading && (
-                  <tr>
-                    <td colSpan="7">
-                      <div className="empty-state">
-                        <h3>{events.length === 0 ? 'Chưa có sự kiện Analytics nào' : 'Không tìm thấy sự kiện phù hợp'}</h3>
-                        <p>
-                          {events.length === 0
-                            ? 'Tích hợp AppTelemetry.logEvent() hoặc logScreenView() trong Flutter để ghi nhận hành vi người dùng.'
-                            : 'Thử tìm kiếm với từ khóa khác hoặc chuyển tab lọc.'}
-                        </p>
-                      </div>
-                    </td>
-                  </tr>
-                )}
-
-                {paginatedEvents.map((event) => {
-                  const isScreen = event.event_type === 'screen_view' || event.event_name === 'screen_view';
-                  const paramsParsed = parseJsonSafe(event.parameters);
-
-                  return (
-                    <tr
-                      key={event.id}
-                      data-monitor-row
-                      tabIndex={0}
-                      onClick={() => openDetail('event', event, setSelectedEvent)}
-                      style={{ cursor: 'pointer' }}
-                      title="Nhấn để xem chi tiết tham số"
-                    >
-                      <td className="timestamp-cell" style={{ whiteSpace: 'nowrap', fontSize: '0.78rem', lineHeight: 1.4 }}>
-                        <div>{formatVietnamDate(event.created_at)}</div>
-                        <div style={{ color: 'var(--text-dim)', fontWeight: 600 }}>{formatVietnamTime(event.created_at)}</div>
-                      </td>
-                      <td>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                          <span className="type-badge" style={{ background: 'rgba(125, 156, 255, 0.12)', color: 'var(--accent)', width: 'fit-content', fontSize: '0.72rem' }}>
-                            {event.job_name || event.app_identifier || 'App/Web'}
-                          </span>
-                          <small style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>
-                            <code>{event.app_identifier}</code>
-                          </small>
-                        </div>
-                      </td>
-                      <td>
-                        {isScreen ? (
-                          <span className="badge-screen-view">
-                            📱 screen_view
-                          </span>
-                        ) : (
-                          <span className="badge-event-name">
-                            ⚡ {event.event_name}
-                          </span>
-                        )}
-                      </td>
-                      <td style={{ fontSize: '0.82rem', color: event.screen_name ? 'var(--text)' : 'var(--text-dim)' }}>
-                        {event.screen_name ? <b>{event.screen_name}</b> : '—'}
-                      </td>
-                      <td>
-                        {event.user_id ? (
-                          <span className="user-tag">👤 {event.user_id}</span>
-                        ) : (
-                          <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem' }}>Ẩn danh</span>
-                        )}
-                      </td>
-                      <td className="parameters-cell">
-                        {paramsParsed && typeof paramsParsed === 'object' ? (
-                          <div className="key-value-pill-list">
-                            {Object.entries(paramsParsed).slice(0, 3).map(([k, v]) => (
-                              <span key={k} className="key-value-chip">
-                                <span>{k}:</span> <strong>{String(v)}</strong>
-                              </span>
-                            ))}
-                            {Object.keys(paramsParsed).length > 3 && (
-                              <span className="key-value-chip">+ {Object.keys(paramsParsed).length - 3} nữa</span>
-                            )}
-                          </div>
-                        ) : (
-                          <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem' }}>Không có params</span>
-                        )}
-                      </td>
-                      <td className="action-cell events-action-cell">
-                        <button
-                          type="button"
-                          className="view-btn"
-                          style={{ fontSize: '0.72rem', padding: '0.25rem 0.45rem', background: 'rgba(125, 156, 255, 0.12)', color: 'var(--accent)' }}
-                          title="Xem toàn bộ hành trình của người dùng này"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            viewUserTimeline({
-                              user: event.user_name || event.user_id || '',
-                              device: event.device_name || '',
-                              app: event.app_identifier || '',
-                            });
-                          }}
-                        >
-                          🐾
-                        </button>
-                        <button
-                          type="button"
-                          className="view-btn"
-                          style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openDetail('event', event, setSelectedEvent);
-                          }}
-                        >
-                          Chi tiết
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          <PaginationDock
-            currentPage={eventPage}
-            totalItems={filteredEvents.length}
-            pageSize={eventPageSize}
-            onPageChange={setEventPage}
-            onPageSizeChange={(newSize) => { setEventPageSize(newSize); setEventPage(1); setMonitorQuery({ size: newSize }); }}
-          />
-        </section>
+        <EventsPanel
+          events={events}
+          filteredEvents={filteredEvents}
+          paginatedEvents={paginatedEvents}
+          loading={loading}
+          totalEvents={totalEvents}
+          customEventCount={customEventCount}
+          screenViewCount={screenViewCount}
+          eventTab={eventTab}
+          setEventTab={setEventTab}
+          setMonitorQuery={setMonitorQuery}
+          deviceFilter={deviceFilter}
+          handleDeviceChange={handleDeviceChange}
+          uniqueDevices={uniqueDevices}
+          userFilter={userFilter}
+          handleUserChange={handleUserChange}
+          uniqueUsers={uniqueUsers}
+          platformScope={platformScope}
+          searchTerm={searchTerm}
+          setSearchTerm={setSearchTerm}
+          eventPage={eventPage}
+          setEventPage={setEventPage}
+          eventPageSize={eventPageSize}
+          setEventPageSize={setEventPageSize}
+          onOpenDetail={openDetail}
+          viewUserTimeline={viewUserTimeline}
+        />
       )}
 
+      {/* MODE 4: FUNNELS PANEL */}
       {telemetryMode === 'funnels' && (
-        <section className="log-panel" aria-labelledby="funnel-stats-title">
-          <div className="log-panel-header">
-            <div className="log-title-group">
-              <h2 id="funnel-stats-title">
-                {funnelStats?.funnel?.name || 'Thống kê sự kiện'}
-              </h2>
-              <span className="count-pill">
-                {statsLoading ? 'Đang tính…' : `${funnelStats?.totals?.attempts ?? 0} lượt thử`}
-              </span>
-            </div>
-
-            <div className="log-controls">
-              <CustomSelect
-                className="select-mini"
-                value={activeFunnel}
-                onChange={(val) => setActiveFunnel(val)}
-                options={funnels.map((item) => ({
-                  value: item.funnel_key,
-                  label: `${item.status === 'inactive' ? '⏸ ' : ''}${item.name}`,
-                }))}
-                ariaLabel="Chọn luồng sự kiện cần thống kê"
-                placeholder="Chưa có luồng nào…"
-              />
-              <CustomSelect
-                className="select-mini"
-                value={statsRange}
-                onChange={(val) => setStatsRange(Number(val))}
-                options={RANGE_OPTIONS}
-                ariaLabel="Khoảng thời gian thống kê"
-              />
-              <button type="button" className="view-btn" onClick={() => openFunnelSetup()}>
-                ＋ Thêm luồng
-              </button>
-              {activeFunnel && (
-                <button
-                  type="button"
-                  className="view-btn"
-                  onClick={() => openFunnelSetup(activeFunnel)}
-                  title="Sửa cấu hình luồng đang chọn"
-                >
-                  ⚙️ Cấu hình
-                </button>
-              )}
-            </div>
-          </div>
-
-          {statsError && (
-            <div className="funnel-alert" role="alert">
-              ⚠️ {statsError}
-            </div>
-          )}
-
-          {!statsError && !funnelStats && !statsLoading && (
-            <div className="empty-state" style={{ padding: '2.5rem 1.25rem' }}>
-              <h3>Chưa có luồng sự kiện nào để thống kê</h3>
-              <p>
-                Bấm “Thêm luồng”, nhập tiền tố sự kiện (ví dụ <code>ekyb_</code>) và hệ thống sẽ
-                tự dò các sự kiện bắt đầu / thành công / thất bại tương ứng.
-              </p>
-            </div>
-          )}
-
-          {funnelStats && funnelStats.totals.attempts === 0 && (
-            <div className="empty-state" style={{ padding: '2.5rem 1.25rem' }}>
-              <h3>Không có lượt thử nào trong khoảng đã chọn</h3>
-              <p>
-                Đã quét {funnelStats.totals.events} sự kiện thuộc luồng này từ{' '}
-                {funnelStats.range.day_from} đến {funnelStats.range.day_to}. Thử mở rộng khoảng
-                thời gian, hoặc kiểm tra lại tên sự kiện tương quan trong phần Cấu hình.
-              </p>
-            </div>
-          )}
-
-          {funnelStats && funnelStats.totals.attempts > 0 && (
-            <div className="funnel-body">
-              {/* Phân bố kết quả cuối cùng */}
-              <div className="funnel-block">
-                <div className="funnel-block-head">
-                  <h3>Kết quả cuối cùng</h3>
-                  <span>
-                    {funnelStats.totals.completed}/{funnelStats.totals.attempts} lượt đã kết thúc
-                  </span>
-                </div>
-
-                <div className="outcome-bar" role="img" aria-label="Phân bố kết quả">
-                  {funnelStats.outcomes
-                    .filter((item) => item.count > 0)
-                    .map((item) => (
-                      <div
-                        key={item.key}
-                        className="outcome-bar-slice"
-                        style={{
-                          width: `${item.pct_of_attempts}%`,
-                          backgroundColor: OUTCOME_COLORS[item.key] || 'var(--line-strong)',
-                        }}
-                        title={`${item.label}: ${item.count} (${item.pct_of_attempts}%)`}
-                      />
-                    ))}
-                </div>
-
-                <ul className="outcome-legend">
-                  {funnelStats.outcomes
-                    .filter((item) => item.count > 0 || item.key !== 'other')
-                    .map((item) => (
-                      <li key={item.key}>
-                        <span
-                          className="legend-dot"
-                          style={{ backgroundColor: OUTCOME_COLORS[item.key] || 'var(--line-strong)' }}
-                        />
-                        <span className="legend-label">{item.label}</span>
-                        <strong>{item.count}</strong>
-                        <small>
-                          {item.pct_of_attempts}% lượt thử
-                          {item.pct_of_completed !== null && item.pct_of_completed !== undefined
-                            ? ` · ${item.pct_of_completed}% lượt đã kết thúc`
-                            : ''}
-                        </small>
-                      </li>
-                    ))}
-                </ul>
-              </div>
-
-              {/* Phễu theo từng bước */}
-              <div className="funnel-block">
-                <div className="funnel-block-head">
-                  <h3>Phễu theo từng bước</h3>
-                  <span>Tỷ lệ tính trên số lượt đã có kết quả ở bước đó</span>
-                </div>
-
-                <div className="step-list">
-                  {funnelStats.steps.map((step) => {
-                    const resolved = step.succeeded + step.failed;
-                    const widthBase = Math.max(1, funnelStats.steps[0]?.started || step.started || 1);
-                    return (
-                      <div className="step-row" key={step.step}>
-                        <div className="step-name">
-                          <strong>{step.label}</strong>
-                          <code>{step.step}</code>
-                        </div>
-                        <div className="step-bar-wrap">
-                          <div
-                            className="step-bar"
-                            style={{ width: `${Math.max(2, (step.started / widthBase) * 100)}%` }}
-                          >
-                            <div
-                              className="step-bar-ok"
-                              style={{ width: `${resolved ? (step.succeeded / resolved) * 100 : 0}%` }}
-                            />
-                            <div
-                              className="step-bar-fail"
-                              style={{ width: `${resolved ? (step.failed / resolved) * 100 : 0}%` }}
-                            />
-                          </div>
-                        </div>
-                        <div className="step-numbers">
-                          <span title="Số lượt bắt đầu bước này">▶ {step.started}</span>
-                          <span className="ok" title="Thành công">✓ {step.succeeded}</span>
-                          <span className={step.failed ? 'fail' : ''} title="Thất bại">
-                            ✕ {step.failed}
-                          </span>
-                          <span className="pctcell">{step.success_pct}%</span>
-                          <span className="latency" title={`${step.samples} mẫu đo`}>
-                            p50 {formatMs(step.p50_ms)} · p95 {formatMs(step.p95_ms)}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Nguyên nhân lỗi */}
-              {funnelStats.top_failures.length > 0 && (
-                <div className="funnel-block">
-                  <div className="funnel-block-head">
-                    <h3>Nguyên nhân thất bại hay gặp</h3>
-                    <span>% tính trên tổng số bước lỗi</span>
-                  </div>
-                  <div className="reason-table-wrap">
-                    <table className="reason-table">
-                      <thead>
-                        <tr>
-                          <th>Bước</th>
-                          <th>Lý do</th>
-                          <th>Mã lỗi</th>
-                          <th>HTTP</th>
-                          <th style={{ textAlign: 'right' }}>Số lần</th>
-                          <th style={{ textAlign: 'right' }}>Tỷ lệ</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {funnelStats.top_failures.map((row, index) => (
-                          <tr key={`${row.step}-${row.reason}-${row.error_code}-${index}`}>
-                            <td>{row.label || '—'}</td>
-                            <td><code>{row.reason || '—'}</code></td>
-                            <td>{row.error_code || '—'}</td>
-                            <td>{row.status_code || '—'}</td>
-                            <td style={{ textAlign: 'right', fontWeight: 700 }}>{row.count}</td>
-                            <td style={{ textAlign: 'right', color: 'var(--danger)' }}>{row.pct}%</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
-              {/* Lý do chuyển duyệt tay */}
-              {funnelStats.manual_fallbacks.length > 0 && (
-                <div className="funnel-block">
-                  <div className="funnel-block-head">
-                    <h3>Lý do bị chuyển sang duyệt tay</h3>
-                    <span>Số liệu cho SLA xử lý hồ sơ thủ công</span>
-                  </div>
-                  <ul className="fallback-list">
-                    {funnelStats.manual_fallbacks.map((row, index) => (
-                      <li key={`${row.step}-${row.reason}-${index}`}>
-                        <span className="fallback-step">{row.label || '—'}</span>
-                        <code>{row.reason || 'không ghi lý do'}</code>
-                        <strong>{row.count}</strong>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {/* Diễn biến theo ngày */}
-              {funnelStats.series.length > 0 && (
-                <div className="funnel-block">
-                  <div className="funnel-block-head">
-                    <h3>Diễn biến theo ngày</h3>
-                    <span>
-                      Giờ Việt Nam
-                      {funnelStats.history_days
-                        ? ` · ${funnelStats.history_days} ngày lấy từ bảng tổng hợp`
-                        : ''}
-                    </span>
-                  </div>
-                  <div className="series-chart">
-                    {funnelStats.series.map((point) => {
-                      const peak = Math.max(...funnelStats.series.map((p) => p.attempts), 1);
-                      return (
-                        <div className="series-col" key={point.bucket}>
-                          <div
-                            className="series-stack"
-                            style={{ height: `${Math.max(4, (point.attempts / peak) * 100)}%` }}
-                            title={`${point.bucket}: ${point.attempts} lượt thử`}
-                          >
-                            {['success_auto', 'success_manual', 'failed', 'abandoned', 'open'].map(
-                              (key) =>
-                                point[key] > 0 ? (
-                                  <div
-                                    key={key}
-                                    style={{
-                                      height: `${(point[key] / point.attempts) * 100}%`,
-                                      backgroundColor: OUTCOME_COLORS[key],
-                                    }}
-                                  />
-                                ) : null
-                            )}
-                          </div>
-                          <span className="series-value">{point.attempts}</span>
-                          <span className="series-label">{point.bucket.slice(5)}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </section>
+        <EventFunnelsPanel
+          funnelStats={funnelStats}
+          statsLoading={statsLoading}
+          statsError={statsError}
+          activeFunnel={activeFunnel}
+          setActiveFunnel={setActiveFunnel}
+          funnels={funnels}
+          statsRange={statsRange}
+          setStatsRange={setStatsRange}
+          openFunnelSetup={openFunnelSetup}
+        />
       )}
 
       {/* 5. User Journey Timeline Panel */}
