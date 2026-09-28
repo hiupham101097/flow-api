@@ -244,7 +244,8 @@ function Dashboard() {
     isFetchingUsersRef.current = true;
     try {
       const response = await fetch(`${API_MONITOR_URL}/users`, {
-        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        headers: { Accept: 'application/json', 'Cache-Control': 'no-cache, no-store, must-revalidate', Pragma: 'no-cache' },
       });
       if (response.ok) {
         const data = await response.json();
@@ -278,7 +279,10 @@ function Dashboard() {
     try {
       const response = await fetch(
         `${API_MONITOR_URL}/telemetry/detail?type=${type}&id=${encodeURIComponent(row.id)}`,
-        { cache: 'no-store', headers: { Accept: 'application/json' } }
+        {
+          cache: 'no-store',
+          headers: { Accept: 'application/json', 'Cache-Control': 'no-cache, no-store, must-revalidate', Pragma: 'no-cache' },
+        }
       );
       if (!response.ok) return;
       const full = await response.json();
@@ -297,7 +301,8 @@ function Dashboard() {
     isFetchingMetaRef.current = true;
     try {
       const response = await fetch(`${API_MONITOR_URL}/telemetry/filters?platform=${encodeURIComponent(scope || 'all')}`, {
-        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        headers: { Accept: 'application/json', 'Cache-Control': 'no-cache, no-store, must-revalidate', Pragma: 'no-cache' },
       });
       if (response.ok) {
         const data = await response.json();
@@ -391,8 +396,14 @@ function Dashboard() {
       };
 
       const held = telemetryRef.current;
-      // Không đặt cache:'no-store' nữa để header Cache-Control của worker còn tác dụng
-      const fetchOptions = { headers: { Accept: 'application/json' } };
+      const fetchOptions = {
+        cache: 'no-store',
+        headers: {
+          Accept: 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          Pragma: 'no-cache',
+        },
+      };
       const [logsRes, crashesRes, eventsRes] = await Promise.all([
         fetch(`${API_MONITOR_URL}${withCursor('/logs', held.logs)}`, fetchOptions),
         fetch(`${API_MONITOR_URL}${withCursor('/crashes', held.crashes)}`, fetchOptions),

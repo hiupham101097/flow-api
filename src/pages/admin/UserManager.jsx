@@ -43,7 +43,8 @@ function UserManager() {
     try {
       setLoading(true);
       const res = await fetch(`${API_BASE_URL}/users`, {
-        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        headers: { Accept: 'application/json', 'Cache-Control': 'no-cache, no-store, must-revalidate', Pragma: 'no-cache' },
       });
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const data = await res.json();

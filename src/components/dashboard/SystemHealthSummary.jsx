@@ -20,7 +20,14 @@ function SystemHealthSummary({ selectedApp = '', platformScope = 'app' }) {
         queryParams.set('app_identifier', selectedApp);
       }
       const url = getApiUrl(`/telemetry/health?${queryParams.toString()}`);
-      const res = await fetch(url);
+      const res = await fetch(url, {
+        cache: 'no-store',
+        headers: {
+          Accept: 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          Pragma: 'no-cache',
+        },
+      });
       if (res.ok) {
         const data = await res.json();
         setHealth(data);

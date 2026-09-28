@@ -318,13 +318,13 @@ export default function Setup() {
               {activeTab === 'web' ? 'Tệp SDK hoàn chỉnh: api-logger.service.ts' : 'Tệp SDK hoàn chỉnh: api_logger.dart'}
             </strong>
             <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.5rem', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', fontWeight: 650 }}>
-              Batching + PII Redaction
+              Real-time Direct + PII Redaction
             </span>
           </div>
           <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0 }}>
             {activeTab === 'web'
-              ? 'Tích hợp sẵn bộ đệm gom nhóm (Buffer Queue 10 items / 3.5s), tự động lọc che giấu Password & Bearer Token, hỗ trợ Angular 15+ & Standalone.'
-              : 'Tích hợp sẵn hàng đợi Batching gửi tới /telemetry/batch, tự động che giấu PII nhạy cảm, gửi khẩn cấp Fatal Crash và giữ queue khi mất mạng.'}
+              ? 'Gửi trực tiếp theo thời gian thực lên API, không lưu cache/đệm trễ, tự động lọc che giấu Password & Bearer Token, hỗ trợ Angular 15+ & Standalone.'
+              : 'Gửi trực tiếp theo thời gian thực lên API Cloudflare, không lưu cache/đệm trễ, tự động lọc che giấu PII nhạy cảm và báo cáo Fatal Crash tức thì.'}
           </p>
         </div>
 

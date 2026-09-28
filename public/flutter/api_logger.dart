@@ -328,11 +328,12 @@ class ApiLogger {
     dynamic safeRequest = maskPII(_sanitizePayload(requestPayload));
     dynamic safeResponse = maskPII(_sanitizePayload(responsePayload));
 
+    final targetUrl = serverUrl ?? '$defaultEndpoint/logs';
     final effectiveDevice = (deviceName != null && deviceName.isNotEmpty) ? deviceName : AppTelemetry.deviceName;
     final effectiveUser = (userName != null && userName.isNotEmpty) ? userName : AppTelemetry.userName;
 
-    final logItem = {
-      'app_identifier': appId,
+    final payload = {
+      'app_id': appId,
       'endpoint': endpoint,
       'method': method.toUpperCase(),
       'status_code': statusCode,
@@ -344,13 +345,13 @@ class ApiLogger {
       if (effectiveUser != null && effectiveUser.isNotEmpty) 'user_name': effectiveUser,
     };
 
-    _logBuffer.add(logItem);
-
-    if (_logBuffer.length >= 10) {
-      flushBatch(serverUrl);
-    } else {
-      _scheduleFlush();
-    }
+    http
+        .post(
+          Uri.parse(targetUrl),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(payload),
+        )
+        .catchError((_) => http.Response('', 500));
   }
 
   static dynamic _sanitizePayload(dynamic payload) {
@@ -484,26 +485,24 @@ class AppTelemetry {
       mergedDeviceInfo['device_name'] = effectiveDevice;
     }
 
-    final crashItem = {
-      'app_identifier': effectiveAppId,
+    final payload = {
+      'app_id': effectiveAppId,
       'error_message': exception.toString(),
       'stack_trace': stack?.toString(),
-      'is_fatal': isFatal ? 1 : 0,
+      'is_fatal': isFatal,
       'device_info': ApiLogger.maskPII(mergedDeviceInfo),
       'os': osName,
       'platform': platformId,
       'custom_attributes': ApiLogger.maskPII(customAttributes),
     };
 
-    ApiLogger._crashBuffer.add(crashItem);
-
-    if (isFatal) {
-      ApiLogger.flushBatch(serverUrl);
-    } else if (ApiLogger._crashBuffer.length >= 5) {
-      ApiLogger.flushBatch(serverUrl);
-    } else {
-      ApiLogger._scheduleFlush();
-    }
+    http
+        .post(
+          Uri.parse(targetUrl),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(payload),
+        )
+        .catchError((_) => http.Response('', 500));
   }
 
   /// Ghi nhận Sự kiện Analytics (Event tracking song song với Firebase Analytics)
@@ -517,6 +516,7 @@ class AppTelemetry {
     String? appId,
     String? serverUrl,
   }) {
+    final targetUrl = serverUrl ?? '$defaultEndpoint/events';
     final effectiveAppId = appId ?? _defaultAppId;
     final effectiveDevice = deviceName ?? AppTelemetry.deviceName;
 
@@ -525,8 +525,8 @@ class AppTelemetry {
       mergedDeviceInfo['device_name'] = effectiveDevice;
     }
 
-    final eventItem = {
-      'app_identifier': effectiveAppId,
+    final payload = {
+      'app_id': effectiveAppId,
       'event_name': name,
       'event_type': 'event',
       'screen_name': screenName,
@@ -535,13 +535,13 @@ class AppTelemetry {
       'device_info': mergedDeviceInfo,
     };
 
-    ApiLogger._eventBuffer.add(eventItem);
-
-    if (ApiLogger._eventBuffer.length >= 10) {
-      ApiLogger.flushBatch(serverUrl);
-    } else {
-      ApiLogger._scheduleFlush();
-    }
+    http
+        .post(
+          Uri.parse(targetUrl),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(payload),
+        )
+        .catchError((_) => http.Response('', 500));
   }
 
   /// Ghi nhận chuyển màn hình (Screen View)

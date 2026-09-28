@@ -17,7 +17,14 @@ function IssueDetailModal({ issueId, isOpen, onClose, onStatusChanged, onViewUse
   const fetchDetail = async () => {
     setLoading(true);
     try {
-      const res = await fetch(getApiUrl(`/issues/${issueId}`));
+      const res = await fetch(getApiUrl(`/issues/${issueId}`), {
+        cache: 'no-store',
+        headers: {
+          Accept: 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          Pragma: 'no-cache',
+        },
+      });
       if (res.ok) {
         const json = await res.json();
         setData(json);

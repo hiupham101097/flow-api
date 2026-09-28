@@ -35,7 +35,14 @@ function IssueManagementPanel({ selectedApp = '', activeUserJob = null, onViewUs
       params.set('limit', String(limit));
       params.set('offset', String(page * limit));
 
-      const res = await fetch(getApiUrl(`/issues?${params.toString()}`));
+      const res = await fetch(getApiUrl(`/issues?${params.toString()}`), {
+        cache: 'no-store',
+        headers: {
+          Accept: 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          Pragma: 'no-cache',
+        },
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setIssues(data.issues || []);

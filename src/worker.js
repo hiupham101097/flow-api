@@ -1275,13 +1275,14 @@ async function triggerTelegramAlert(db, type, payload) {
   }
 }
 
-const jsonResponse = (data, status = 200, cacheControl = null) => {
-  const headers = { ...corsHeaders, 'Content-Type': 'application/json' };
-  if (cacheControl) {
-    headers['Cache-Control'] = cacheControl;
-  } else if (status === 200) {
-    headers['Cache-Control'] = 'no-cache';
-  }
+const jsonResponse = (data, status = 200) => {
+  const headers = {
+    ...corsHeaders,
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+    'Pragma': 'no-cache',
+    'Expires': '0',
+  };
   return new Response(JSON.stringify(data), { status, headers });
 };
 
@@ -1302,7 +1303,7 @@ const QUOTA_MESSAGE =
 // Dùng ở khối catch của các endpoint đọc: phân biệt hết hạn mức với lỗi thật.
 const readErrorResponse = (err, extra = {}, db = null) => {
   if (isD1QuotaExceeded(err)) {
-    return jsonResponse({ quota_exceeded: true, error: QUOTA_MESSAGE, ...extra }, 200, 'public, max-age=60');
+    return jsonResponse({ quota_exceeded: true, error: QUOTA_MESSAGE, ...extra }, 200);
   }
   // DB mới tinh chưa có bảng: vì schema chỉ được tạo ở lượt ghi, dựng lại ngay
   // để request kế tiếp chạy được thay vì hỏng mãi.
@@ -1653,15 +1654,10 @@ export default {
     if (path === '/telemetry/filters' && request.method === 'GET') {
       try {
         const platform = (url.searchParams.get('platform') || '').trim().toLowerCase();
-        const cacheKey = platform || 'all';
-        const cached = filterCacheMap.get(cacheKey);
-        if (cached && Date.now() - cached.at < FILTER_TTL_MS) {
-          return jsonResponse(cached.value, 200, 'public, max-age=30, stale-while-revalidate=60');
-        }
 
         const dims = await loadDimensions(env.DB);
 
-        // Danh sách app lấy thẳng từ bảng jobs — không cần quét bảng telemetry
+        // Danh sách app lấy thẳng từ bảng jobs thực tế — không bịa dữ liệu
         const appsMap = new Map();
         dims.jobs.forEach((job) => {
           if (!job.app_identifier) return;
@@ -1741,19 +1737,9 @@ export default {
         if (platform === 'web') {
           allApps = allApps.filter((a) => a.job_type === 'web');
           allDevices = allDevices.filter((d) => isBrowserDevice(d));
-          if (!allDevices.length) {
-            allDevices = ['Chrome Web', 'Firefox Web', 'Safari Web', 'Edge Web'];
-          }
-          const webUserCandidates = allUsers.filter(
-            (u) => u.toLowerCase().includes('web') || u.toLowerCase().includes('admin') || u.toLowerCase().includes('dev')
-          );
-          allUsers = webUserCandidates.length ? webUserCandidates : ['web-dev', 'Web Developer'];
         } else if (platform === 'app') {
           allApps = allApps.filter((a) => a.job_type === 'app' || !a.job_type);
           allDevices = allDevices.filter((d) => !isBrowserDevice(d));
-          allUsers = allUsers.filter(
-            (u) => !u.toLowerCase().includes('web-dev') && !u.toLowerCase().includes('web developer')
-          );
         }
 
         const value = {
@@ -1761,8 +1747,7 @@ export default {
           devices: allDevices.sort(),
           users: allUsers.sort(),
         };
-        filterCacheMap.set(cacheKey, { at: Date.now(), value });
-        return jsonResponse(value, 200, 'public, max-age=30, stale-while-revalidate=60');
+        return jsonResponse(value, 200);
       } catch (e) {
         return readErrorResponse(e, { apps: [], devices: [], users: [] }, env.DB);
       }
@@ -2776,7 +2761,7 @@ export default {
           }
         }
 
-        return jsonResponse(stats, 200, 'public, max-age=30');
+        return jsonResponse(stats, 200);
       } catch (e) {
         return readErrorResponse(e, {}, env.DB);
       }
@@ -2850,7 +2835,7 @@ export default {
           total_crashes: crashStats?.total || 0,
           fatal_crashes: crashStats?.fatal_count || 0,
           total_events: eventStats?.total || 0,
-        }, 200, 'public, max-age=30');
+        }, 200);
       } catch (e) {
         return readErrorResponse(e, {}, env.DB);
       }

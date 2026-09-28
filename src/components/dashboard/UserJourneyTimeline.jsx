@@ -42,7 +42,14 @@ function UserJourneyTimeline({
       if (app) params.append('app_identifier', app);
       params.append('limit', limit);
 
-      const res = await fetch(getApiUrl(`/telemetry/timeline?${params.toString()}`));
+      const res = await fetch(getApiUrl(`/telemetry/timeline?${params.toString()}`), {
+        cache: 'no-store',
+        headers: {
+          Accept: 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          Pragma: 'no-cache',
+        },
+      });
       const data = await res.json();
       if (res.ok) {
         setItems(data.items || []);

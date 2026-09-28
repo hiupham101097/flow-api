@@ -239,7 +239,7 @@ export class ApiLoggerService {
   }
 
   /**
-   * Gửi Log API lên Cloudflare Dashboard (Gom nhóm Batch & Khử PII)
+   * Gửi Log API lên Cloudflare Dashboard (Gửi ngay lập tức, không lưu đệm)
    */
   public static sendApiLog(params: {
     endpoint: string;
@@ -259,8 +259,8 @@ export class ApiLoggerService {
       const safeReq = ApiLoggerService.maskPII(params.requestPayload);
       const safeRes = ApiLoggerService.maskPII(params.responsePayload);
 
-      const logItem = {
-        app_identifier: ApiLoggerService.appId,
+      const payload = {
+        app_id: ApiLoggerService.appId,
         endpoint: params.endpoint,
         method: params.method.toUpperCase(),
         status_code: params.statusCode,
@@ -276,18 +276,22 @@ export class ApiLoggerService {
         user_name: ApiLoggerService.userName || undefined,
       };
 
-      ApiLoggerService._logQueue.push(logItem);
-
-      if (ApiLoggerService._logQueue.length >= 10) {
-        ApiLoggerService.flushBatch();
-      } else {
-        ApiLoggerService.scheduleFlush();
+      if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+        const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+        if (navigator.sendBeacon(`${ApiLoggerService.serverUrl}/logs`, blob)) return;
       }
+
+      fetch(`${ApiLoggerService.serverUrl}/logs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        keepalive: true,
+      }).catch(() => {});
     } catch (_) {}
   }
 
   /**
-   * Gửi sự cố Crashlytics / JavaScript Runtime Exception về Dashboard
+   * Gửi sự cố Crashlytics / JavaScript Runtime Exception về Dashboard ngay lập tức
    */
   public static recordCrash(params: {
     exception: any;
@@ -296,8 +300,8 @@ export class ApiLoggerService {
     deviceInfo?: Record<string, any>;
   }): void {
     try {
-      const crashItem = {
-        app_identifier: ApiLoggerService.appId,
+      const payload = {
+        app_id: ApiLoggerService.appId,
         error_message: params.exception?.message || String(params.exception),
         stack_trace: params.stackTrace || params.exception?.stack || '',
         is_fatal: params.isFatal ? 1 : 0,
@@ -309,21 +313,17 @@ export class ApiLoggerService {
         user_name: ApiLoggerService.userName || undefined,
       };
 
-      ApiLoggerService._crashQueue.push(crashItem);
-
-      // Nếu là Fatal crash thì bắn đi ngay lập tức không chờ buffer
-      if (params.isFatal) {
-        ApiLoggerService.flushBatch();
-      } else if (ApiLoggerService._crashQueue.length >= 5) {
-        ApiLoggerService.flushBatch();
-      } else {
-        ApiLoggerService.scheduleFlush();
-      }
+      fetch(`${ApiLoggerService.serverUrl}/crashes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        keepalive: true,
+      }).catch(() => {});
     } catch (_) {}
   }
 
   /**
-   * Gửi Sự kiện nghiệp vụ hoặc Theo dõi hành vi (Analytics Event)
+   * Gửi Sự kiện nghiệp vụ hoặc Theo dõi hành vi (Analytics Event) ngay lập tức
    */
   public static logEvent(
     eventName: string,
@@ -331,8 +331,8 @@ export class ApiLoggerService {
     options?: { screenName?: string; userId?: string }
   ): void {
     try {
-      const eventItem = {
-        app_identifier: ApiLoggerService.appId,
+      const payload = {
+        app_id: ApiLoggerService.appId,
         event_name: eventName,
         event_type: options?.screenName ? 'screen_view' : 'custom',
         screen_name: options?.screenName,
@@ -342,13 +342,12 @@ export class ApiLoggerService {
         user_name: ApiLoggerService.userName || undefined,
       };
 
-      ApiLoggerService._eventQueue.push(eventItem);
-
-      if (ApiLoggerService._eventQueue.length >= 10) {
-        ApiLoggerService.flushBatch();
-      } else {
-        ApiLoggerService.scheduleFlush();
-      }
+      fetch(`${ApiLoggerService.serverUrl}/events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        keepalive: true,
+      }).catch(() => {});
     } catch (_) {}
   }
 

@@ -25,7 +25,14 @@ function TelegramSettingsModal({ isOpen, onClose, onSaved }) {
     setLoading(true);
     setStatusMsg(null);
     try {
-      const res = await fetch(getApiUrl('/settings/telegram'));
+      const res = await fetch(getApiUrl('/settings/telegram'), {
+        cache: 'no-store',
+        headers: {
+          Accept: 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          Pragma: 'no-cache',
+        },
+      });
       if (res.ok) {
         const data = await res.json();
         setIsConfigured(Boolean(data.configured));
