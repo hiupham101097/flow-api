@@ -127,6 +127,24 @@ function IssueManagementPanel({ selectedApp = '', activeUserJob = null, onViewUs
     }
   };
 
+  const getMethodStyle = (m = 'GET') => {
+    const method = String(m).toUpperCase();
+    switch (method) {
+      case 'GET':
+        return { bg: 'rgba(16, 185, 129, 0.15)', color: '#10b981', border: 'rgba(16, 185, 129, 0.35)' };
+      case 'POST':
+        return { bg: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', border: 'rgba(56, 189, 248, 0.35)' };
+      case 'PUT':
+        return { bg: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b', border: 'rgba(245, 158, 11, 0.35)' };
+      case 'DELETE':
+        return { bg: 'rgba(244, 63, 94, 0.15)', color: '#f43f5e', border: 'rgba(244, 63, 94, 0.35)' };
+      case 'PATCH':
+        return { bg: 'rgba(192, 132, 252, 0.15)', color: '#c084fc', border: 'rgba(192, 132, 252, 0.35)' };
+      default:
+        return { bg: 'rgba(156, 163, 175, 0.15)', color: '#9ca3af', border: 'rgba(156, 163, 175, 0.35)' };
+    }
+  };
+
   return (
     <div className="issues-management-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
       {/* 1. Top Metrics Strip */}
@@ -370,6 +388,17 @@ function IssueManagementPanel({ selectedApp = '', activeUserJob = null, onViewUs
               const sev = getSeverityStyle(issue.severity);
               const isActionRunning = actionLoadingId === issue.id;
 
+              // Trích xuất thông tin HTTP request từ parsed_sample hoặc title
+              const parsed = issue.parsed_sample || {};
+              const method = (parsed.method || (issue.title?.match(/^(GET|POST|PUT|DELETE|PATCH)\b/i)?.[1]) || (issue.type === 'crash' ? null : 'GET'))?.toUpperCase();
+              const endpoint = parsed.endpoint || (issue.title?.match(/^(?:GET|POST|PUT|DELETE|PATCH)\s+([^\s(]+)/i)?.[1]) || (issue.culprit?.startsWith('/') ? issue.culprit : '');
+              const statusCode = parsed.status_code || (issue.title?.match(/\((\d{3})\)/)?.[1]) || (issue.type === 'crash' ? null : 500);
+              const errorMsg = parsed.error_message || (issue.culprit && issue.culprit !== endpoint ? issue.culprit : (issue.type === 'crash' ? issue.title : ''));
+              const clientUser = parsed.user_name;
+              const clientDevice = parsed.device_name;
+              const durationMs = parsed.duration_ms;
+              const methStyle = method ? getMethodStyle(method) : null;
+
               return (
                 <div
                   key={issue.id}
@@ -377,12 +406,12 @@ function IssueManagementPanel({ selectedApp = '', activeUserJob = null, onViewUs
                   style={{
                     display: 'flex',
                     flexDirection: 'column',
-                    padding: '1rem 1.25rem',
+                    padding: '1.1rem 1.35rem',
                     borderBottom: '1px solid var(--line)',
                     cursor: 'pointer',
-                    transition: 'background 0.15s ease',
+                    transition: 'all 0.15s ease',
                     position: 'relative',
-                    gap: '0.55rem',
+                    gap: '0.65rem',
                   }}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.backgroundColor = 'var(--surface-hover, rgba(255,255,255,0.03))';
@@ -391,7 +420,7 @@ function IssueManagementPanel({ selectedApp = '', activeUserJob = null, onViewUs
                     e.currentTarget.style.backgroundColor = 'transparent';
                   }}
                 >
-                  {/* Top Row: Badges, Title, Culprit & Actions */}
+                  {/* Top Row: Badges, Title, Request Info & Actions */}
                   <div
                     style={{
                       display: 'flex',
@@ -401,14 +430,14 @@ function IssueManagementPanel({ selectedApp = '', activeUserJob = null, onViewUs
                       flexWrap: 'wrap',
                     }}
                   >
-                    <div style={{ flex: 1, minWidth: '280px' }}>
+                    <div style={{ flex: 1, minWidth: '300px' }}>
                       <div
                         style={{
                           display: 'flex',
                           alignItems: 'center',
                           gap: '0.5rem',
                           flexWrap: 'wrap',
-                          marginBottom: '0.35rem',
+                          marginBottom: '0.45rem',
                         }}
                       >
                         {/* Severity badge */}
@@ -470,32 +499,113 @@ function IssueManagementPanel({ selectedApp = '', activeUserJob = null, onViewUs
                         </span>
                       </div>
 
-                      {/* Title */}
-                      <h4
-                        style={{
-                          margin: '0 0 0.25rem',
-                          fontSize: '0.98rem',
-                          fontWeight: 700,
-                          color: 'var(--text)',
-                          lineHeight: 1.35,
-                        }}
-                      >
-                        {issue.title || 'Lỗi không tên'}
-                      </h4>
-
-                      {/* Culprit */}
-                      {issue.culprit && (
+                      {/* Request Bar for API Errors */}
+                      {method && endpoint ? (
                         <div
                           style={{
-                            fontSize: '0.78rem',
-                            color: 'var(--text-muted)',
-                            fontFamily: 'var(--font-mono)',
-                            wordBreak: 'break-all',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.6rem',
+                            margin: '0.15rem 0 0.35rem',
+                            flexWrap: 'wrap',
                           }}
                         >
-                          📍 {issue.culprit}
+                          <span
+                            style={{
+                              padding: '0.18rem 0.55rem',
+                              borderRadius: '4px',
+                              fontSize: '0.74rem',
+                              fontWeight: 800,
+                              fontFamily: 'var(--font-mono)',
+                              backgroundColor: methStyle?.bg,
+                              color: methStyle?.color,
+                              border: `1px solid ${methStyle?.border}`,
+                            }}
+                          >
+                            {method}
+                          </span>
+                          <span
+                            style={{
+                              fontFamily: 'var(--font-mono)',
+                              fontSize: '0.94rem',
+                              fontWeight: 700,
+                              color: 'var(--text)',
+                              wordBreak: 'break-all',
+                            }}
+                          >
+                            {endpoint}
+                          </span>
+                          {statusCode && (
+                            <span
+                              style={{
+                                padding: '0.14rem 0.5rem',
+                                borderRadius: '4px',
+                                fontSize: '0.72rem',
+                                fontWeight: 700,
+                                backgroundColor: 'rgba(255, 119, 133, 0.15)',
+                                color: '#ff7785',
+                                border: '1px solid rgba(255, 119, 133, 0.35)',
+                              }}
+                            >
+                              {statusCode}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <h4
+                          style={{
+                            margin: '0 0 0.3rem',
+                            fontSize: '0.98rem',
+                            fontWeight: 700,
+                            color: 'var(--text)',
+                            lineHeight: 1.35,
+                          }}
+                        >
+                          {issue.title || 'Lỗi không tên'}
+                        </h4>
+                      )}
+
+                      {/* Error Message callout */}
+                      {errorMsg && (
+                        <div
+                          style={{
+                            background: 'rgba(255, 171, 0, 0.07)',
+                            borderLeft: '3px solid #ffb300',
+                            padding: '0.4rem 0.75rem',
+                            borderRadius: '0 4px 4px 0',
+                            fontSize: '0.8rem',
+                            color: '#ffb300',
+                            fontFamily: 'var(--font-mono)',
+                            lineHeight: 1.45,
+                            wordBreak: 'break-word',
+                            margin: '0.35rem 0',
+                          }}
+                        >
+                          ⚠️ {errorMsg}
                         </div>
                       )}
+
+                      {/* Request Context Footprint */}
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.85rem',
+                          fontSize: '0.74rem',
+                          color: 'var(--text-dim)',
+                          flexWrap: 'wrap',
+                          marginTop: '0.2rem',
+                        }}
+                      >
+                        {clientUser && <span>👤 User: <strong style={{ color: 'var(--text)' }}>{clientUser}</strong></span>}
+                        {clientDevice && <span>📱 Thiết bị: <strong style={{ color: 'var(--text)' }}>{clientDevice}</strong></span>}
+                        {durationMs !== undefined && durationMs !== null && durationMs > 0 && (
+                          <span>⏱️ Độ trễ: <strong style={{ color: 'var(--accent)' }}>{durationMs}ms</strong></span>
+                        )}
+                        {issue.culprit && issue.culprit !== endpoint && (
+                          <span style={{ fontFamily: 'var(--font-mono)' }}>📍 {issue.culprit}</span>
+                        )}
+                      </div>
                     </div>
 
                     {/* Right side: Quick stats and Action buttons */}
@@ -596,11 +706,20 @@ function IssueManagementPanel({ selectedApp = '', activeUserJob = null, onViewUs
                             openDetail(issue.id);
                           }}
                           style={{
-                            padding: '0.38rem 0.75rem',
-                            fontSize: '0.76rem',
+                            padding: '0.4rem 0.85rem',
+                            fontSize: '0.78rem',
+                            fontWeight: 600,
+                            background: 'rgba(125, 156, 255, 0.12)',
+                            color: 'var(--accent)',
+                            border: '1px solid rgba(125, 156, 255, 0.35)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.35rem',
+                            borderRadius: 'var(--radius-sm)',
                           }}
                         >
-                          Chi tiết →
+                          <span>🔍 Xem Request</span>
+                          <span>→</span>
                         </button>
                       </div>
                     </div>

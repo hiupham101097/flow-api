@@ -733,6 +733,9 @@ async function ensureSchema(db) {
     try {
       await db.prepare('ALTER TABLE app_crashes ADD COLUMN device_name TEXT').run();
     } catch (_) {}
+    try {
+      await db.prepare('ALTER TABLE app_crashes ADD COLUMN user_name TEXT').run();
+    } catch (_) {}
 
     // 6. Tạo bảng app_events nếu chưa có
     await db.prepare(`
@@ -2078,7 +2081,19 @@ export default {
             title,
             culprit,
             severity: 'error',
-            samplePayload: { endpoint, method, status_code, error_message, request_payload, response_payload },
+            samplePayload: {
+              endpoint,
+              method: (method || 'GET').toUpperCase(),
+              status_code,
+              error_message,
+              request_payload,
+              response_payload,
+              duration_ms: duration_ms || 0,
+              device_name: effectiveDeviceName,
+              user_name: clientUserName,
+              ip_address: clientIp,
+              created_at: new Date().toISOString(),
+            },
           });
           logIssueId = issue?.id || null;
 
@@ -3133,7 +3148,19 @@ export default {
               title: lTitle,
               culprit: lCulprit,
               severity: 'error',
-              samplePayload: { endpoint: log.endpoint, method: log.method, status_code: log.status_code, error_message: log.error_message },
+              samplePayload: {
+                endpoint: log.endpoint,
+                method: (log.method || 'GET').toUpperCase(),
+                status_code: log.status_code,
+                error_message: log.error_message,
+                request_payload: log.request_payload,
+                response_payload: log.response_payload,
+                duration_ms: log.duration_ms || 0,
+                device_name: lDevice,
+                user_name: lUser,
+                ip_address: clientIp,
+                created_at: log.created_at || new Date().toISOString(),
+              },
             });
             lIssueId = lIssue?.id || null;
 
@@ -3398,9 +3425,18 @@ export default {
         const dims = await loadDimensions(env.DB);
         const decoratedIssues = (issuesList || []).map((issue) => {
           const job = dims.jobs.find((j) => String(j.id) === String(issue.job_id) || j.app_identifier === issue.app_identifier);
+          let parsedSample = null;
+          if (issue.sample_payload) {
+            try {
+              parsedSample = typeof issue.sample_payload === 'string' ? JSON.parse(issue.sample_payload) : issue.sample_payload;
+            } catch (_) {
+              parsedSample = { raw: issue.sample_payload };
+            }
+          }
           return {
             ...issue,
             job_name: job?.name || issue.app_identifier,
+            parsed_sample: parsedSample,
           };
         });
 
@@ -3431,27 +3467,151 @@ export default {
         }
 
         let recentEvents = [];
+        let breadcrumbs = [];
+        let parsedSample = null;
+
+        if (issue.sample_payload) {
+          try {
+            parsedSample = typeof issue.sample_payload === 'string' ? JSON.parse(issue.sample_payload) : issue.sample_payload;
+          } catch (_) {
+            parsedSample = { raw: issue.sample_payload };
+          }
+        }
+
         if (issue.type === 'crash') {
           const { results } = await env.DB.prepare(`
-            SELECT id, app_identifier, error_message, stack_trace, is_fatal, device_info, custom_attributes, created_at
+            SELECT id, app_identifier, error_message, stack_trace, is_fatal, device_info, custom_attributes, created_at,
+                   COALESCE(device_name, '') as device_name
             FROM app_crashes
             WHERE issue_id = ? OR fingerprint = ?
             ORDER BY id DESC LIMIT 20
           `).bind(issueId, issue.fingerprint).all();
           recentEvents = results || [];
+
+          // Tìm các request của user/device hoặc app ngay trước khi xảy ra crash (Breadcrumbs trail)
+          const latestCrash = recentEvents[0];
+          if (latestCrash) {
+            let crashUser = '';
+            let crashDevice = latestCrash.device_name || '';
+            try {
+              if (latestCrash.custom_attributes) {
+                const ca = typeof latestCrash.custom_attributes === 'string' ? JSON.parse(latestCrash.custom_attributes) : latestCrash.custom_attributes;
+                crashUser = ca.user_name || ca.username || ca.user_id || '';
+                if (!crashDevice && ca.device_name) crashDevice = ca.device_name;
+              }
+              if (!crashDevice && latestCrash.device_info) {
+                const di = typeof latestCrash.device_info === 'string' ? JSON.parse(latestCrash.device_info) : latestCrash.device_info;
+                crashDevice = di.device_name || di.model || di.os || '';
+              }
+            } catch (_) {}
+
+            let bcQuery = `
+              SELECT id, app_identifier, endpoint, method, status_code, duration_ms, error_message, request_payload, response_payload, device_name, user_name, ip_address, created_at
+              FROM api_logs
+              WHERE app_identifier = ?
+            `;
+            const bcParams = [issue.app_identifier];
+
+            if (crashUser) {
+              bcQuery += ` AND user_name = ?`;
+              bcParams.push(crashUser);
+            } else if (crashDevice) {
+              bcQuery += ` AND device_name = ?`;
+              bcParams.push(crashDevice);
+            }
+
+            if (latestCrash.created_at) {
+              bcQuery += ` AND created_at <= ?`;
+              bcParams.push(latestCrash.created_at);
+            }
+
+            bcQuery += ` ORDER BY created_at DESC, id DESC LIMIT 10`;
+
+            try {
+              const { results: bcLogs } = await env.DB.prepare(bcQuery).bind(...bcParams).all();
+              breadcrumbs = (bcLogs || []).reverse();
+            } catch (_) {}
+          }
         } else {
+          // api_error
           const { results } = await env.DB.prepare(`
-            SELECT id, app_identifier, endpoint, method, status_code, error_message, request_payload, response_payload, duration_ms, device_name, user_name, created_at
+            SELECT id, app_identifier, endpoint, method, status_code, error_message, request_payload, response_payload, duration_ms, device_name, user_name, ip_address, created_at
             FROM api_logs
             WHERE issue_id = ? OR fingerprint = ?
             ORDER BY id DESC LIMIT 20
           `).bind(issueId, issue.fingerprint).all();
           recentEvents = results || [];
+
+          // Tìm breadcrumbs cho lần nổ lỗi mới nhất
+          const latestApiErr = recentEvents[0];
+          if (latestApiErr) {
+            let bcQuery = `
+              SELECT id, app_identifier, endpoint, method, status_code, duration_ms, error_message, request_payload, response_payload, device_name, user_name, ip_address, created_at
+              FROM api_logs
+              WHERE app_identifier = ?
+            `;
+            const bcParams = [issue.app_identifier];
+
+            if (latestApiErr.user_name) {
+              bcQuery += ` AND user_name = ?`;
+              bcParams.push(latestApiErr.user_name);
+            } else if (latestApiErr.device_name) {
+              bcQuery += ` AND device_name = ?`;
+              bcParams.push(latestApiErr.device_name);
+            }
+
+            if (latestApiErr.created_at) {
+              bcQuery += ` AND created_at <= ?`;
+              bcParams.push(latestApiErr.created_at);
+            }
+
+            bcQuery += ` ORDER BY created_at DESC, id DESC LIMIT 10`;
+
+            try {
+              const { results: bcLogs } = await env.DB.prepare(bcQuery).bind(...bcParams).all();
+              breadcrumbs = (bcLogs || []).reverse();
+            } catch (_) {}
+          }
         }
 
+        // Nếu breadcrumbs vẫn rỗng, fallback tìm các request gần nhất của app_identifier
+        if (breadcrumbs.length === 0 && issue.app_identifier) {
+          try {
+            const { results: fallbackBc } = await env.DB.prepare(`
+              SELECT id, app_identifier, endpoint, method, status_code, duration_ms, error_message, request_payload, response_payload, device_name, user_name, ip_address, created_at
+              FROM api_logs
+              WHERE app_identifier = ?
+              ORDER BY created_at DESC, id DESC
+              LIMIT 6
+            `).bind(issue.app_identifier).all();
+            breadcrumbs = (fallbackBc || []).reverse();
+          } catch (_) {}
+        }
+
+        const latestEvent = recentEvents[0] || null;
+        const failedRequest = {
+          endpoint: latestEvent?.endpoint || parsedSample?.endpoint || issue.culprit || '',
+          method: latestEvent?.method || parsedSample?.method || 'POST',
+          status_code: latestEvent?.status_code || parsedSample?.status_code || 500,
+          duration_ms: latestEvent?.duration_ms ?? parsedSample?.duration_ms ?? null,
+          error_message: latestEvent?.error_message || parsedSample?.error_message || issue.title || '',
+          request_payload: latestEvent?.request_payload || parsedSample?.request_payload || null,
+          response_payload: latestEvent?.response_payload || parsedSample?.response_payload || null,
+          device_name: latestEvent?.device_name || parsedSample?.device_name || (latestEvent?.device_info ? (typeof latestEvent.device_info === 'string' ? latestEvent.device_info : JSON.stringify(latestEvent.device_info)) : null),
+          user_name: latestEvent?.user_name || parsedSample?.user_name || null,
+          ip_address: latestEvent?.ip_address || parsedSample?.ip_address || null,
+          created_at: latestEvent?.created_at || parsedSample?.created_at || issue.last_seen,
+          stack_trace: latestEvent?.stack_trace || parsedSample?.stack_trace || null,
+        };
+
         return jsonResponse({
-          issue,
+          issue: {
+            ...issue,
+            parsed_sample: parsedSample,
+          },
+          failed_request: failedRequest,
           recent_events: recentEvents,
+          breadcrumbs: breadcrumbs,
         });
       } catch (e) {
         return readErrorResponse(e, {}, env.DB);
