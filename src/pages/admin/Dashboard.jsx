@@ -1,18 +1,20 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import '../../styles/global.css';
-import TelegramSettingsModal from '../../components/dashboard/TelegramSettingsModal';
-import UserJourneyTimeline from '../../components/dashboard/UserJourneyTimeline';
 import SystemHealthSummary from '../../components/dashboard/SystemHealthSummary';
-import IssueManagementPanel from '../../components/dashboard/IssueManagementPanel';
-import ApiLogsPanel from '../../components/dashboard/ApiLogsPanel';
-import CrashlyticsPanel from '../../components/dashboard/CrashlyticsPanel';
-import EventsPanel from '../../components/dashboard/EventsPanel';
-import EventFunnelsPanel from '../../components/dashboard/EventFunnelsPanel';
 import SavedViews from '../../components/ui/SavedViews';
 import TelemetryControlBar from '../../components/dashboard/TelemetryControlBar';
 import CustomSelect from '../../components/ui/CustomSelect';
 import PaginationDock from '../../components/ui/PaginationDock';
+import { SkeletonRows, SkeletonCards } from '../../components/ui/SkeletonTable';
+
+const TelegramSettingsModal = lazy(() => import('../../components/dashboard/TelegramSettingsModal'));
+const UserJourneyTimeline = lazy(() => import('../../components/dashboard/UserJourneyTimeline'));
+const IssueManagementPanel = lazy(() => import('../../components/dashboard/IssueManagementPanel'));
+const ApiLogsPanel = lazy(() => import('../../components/dashboard/ApiLogsPanel'));
+const CrashlyticsPanel = lazy(() => import('../../components/dashboard/CrashlyticsPanel'));
+const EventsPanel = lazy(() => import('../../components/dashboard/EventsPanel'));
+const EventFunnelsPanel = lazy(() => import('../../components/dashboard/EventFunnelsPanel'));
 import { exportToCsv } from '../../utils/exportCsv';
 import { usePlatform } from '../../context/PlatformContext';
 import { API_MONITOR_URL } from '../../constants/api';
@@ -45,6 +47,21 @@ function CodeBlock({ label, value, copyKey, copiedItem, onCopy }) {
         </button>
       </div>
       <pre><code>{value}</code></pre>
+    </div>
+  );
+}
+
+function PanelLoadingFallback() {
+  return (
+    <div style={{ width: '100%', minHeight: '340px', padding: '1rem 0' }}>
+      <SkeletonCards count={4} />
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 'var(--radius)', padding: '1.25rem', overflow: 'hidden' }}>
+        <table className="telemetry-table" style={{ width: '100%' }}>
+          <tbody>
+            <SkeletonRows columns={6} rows={6} />
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -1812,139 +1829,142 @@ export const appConfig: ApplicationConfig = {
         </div>
       )}
 
-      {/* MODE 1: LOGS PANEL */}
-      {telemetryMode === 'logs' && (
-        <ApiLogsPanel
-          logs={logs}
-          filteredLogs={filteredLogs}
-          paginatedLogs={paginatedLogs}
-          loading={loading}
-          totalCalls={totalCalls}
-          count200={count200}
-          count400={count400}
-          count500={count500}
-          activeTab={activeTab}
-          setActiveTab={setActiveTab}
-          setMonitorQuery={setMonitorQuery}
-          deviceFilter={deviceFilter}
-          handleDeviceChange={handleDeviceChange}
-          uniqueDevices={uniqueDevices}
-          userFilter={userFilter}
-          handleUserChange={handleUserChange}
-          uniqueUsers={uniqueUsers}
-          platformScope={platformScope}
-          searchTerm={searchTerm}
-          setSearchTerm={setSearchTerm}
-          logsPage={logsPage}
-          setLogsPage={setLogsPage}
-          logsPageSize={logsPageSize}
-          setLogsPageSize={setLogsPageSize}
-          onOpenDetail={openDetail}
-          viewUserTimeline={viewUserTimeline}
-        />
-      )}
-
-      {/* MODE 2: CRASHLYTICS PANEL */}
-      {telemetryMode === 'crashes' && (
-        <CrashlyticsPanel
-          crashes={crashes}
-          filteredCrashes={filteredCrashes}
-          paginatedCrashes={paginatedCrashes}
-          loading={loading}
-          totalCrashes={totalCrashes}
-          androidCrashes={androidCrashes}
-          iosCrashes={iosCrashes}
-          fatalCrashes={fatalCrashes}
-          nonFatalCrashes={nonFatalCrashes}
-          crashTab={crashTab}
-          setCrashTab={setCrashTab}
-          setMonitorQuery={setMonitorQuery}
-          deviceFilter={deviceFilter}
-          handleDeviceChange={handleDeviceChange}
-          uniqueDevices={uniqueDevices}
-          userFilter={userFilter}
-          handleUserChange={handleUserChange}
-          uniqueUsers={uniqueUsers}
-          platformScope={platformScope}
-          searchTerm={searchTerm}
-          setSearchTerm={setSearchTerm}
-          crashPage={crashPage}
-          setCrashPage={setCrashPage}
-          crashPageSize={crashPageSize}
-          setCrashPageSize={setCrashPageSize}
-          onOpenDetail={openDetail}
-          viewUserTimeline={viewUserTimeline}
-        />
-      )}
-
-      {/* MODE 3: ANALYTICS PANEL */}
-      {telemetryMode === 'analytics' && (
-        <EventsPanel
-          events={events}
-          filteredEvents={filteredEvents}
-          paginatedEvents={paginatedEvents}
-          loading={loading}
-          totalEvents={totalEvents}
-          customEventCount={customEventCount}
-          screenViewCount={screenViewCount}
-          eventTab={eventTab}
-          setEventTab={setEventTab}
-          setMonitorQuery={setMonitorQuery}
-          deviceFilter={deviceFilter}
-          handleDeviceChange={handleDeviceChange}
-          uniqueDevices={uniqueDevices}
-          userFilter={userFilter}
-          handleUserChange={handleUserChange}
-          uniqueUsers={uniqueUsers}
-          platformScope={platformScope}
-          searchTerm={searchTerm}
-          setSearchTerm={setSearchTerm}
-          eventPage={eventPage}
-          setEventPage={setEventPage}
-          eventPageSize={eventPageSize}
-          setEventPageSize={setEventPageSize}
-          onOpenDetail={openDetail}
-          viewUserTimeline={viewUserTimeline}
-        />
-      )}
-
-      {/* MODE 4: FUNNELS PANEL */}
-      {telemetryMode === 'funnels' && (
-        <EventFunnelsPanel
-          funnelStats={funnelStats}
-          statsLoading={statsLoading}
-          statsError={statsError}
-          activeFunnel={activeFunnel}
-          setActiveFunnel={setActiveFunnel}
-          funnels={funnels}
-          statsRange={statsRange}
-          setStatsRange={setStatsRange}
-          openFunnelSetup={openFunnelSetup}
-        />
-      )}
-
-      {/* 5. User Journey Timeline Panel */}
-      {telemetryMode === 'timeline' && (
-        <section className="log-panel" style={{ background: 'none', border: 'none', padding: 0 }}>
-          <UserJourneyTimeline
-            initialUser={timelineUser}
-            initialDevice={timelineDevice}
-            initialApp={timelineApp || (selectedFilter !== 'all' ? selectedFilter : '')}
-            availableUsers={uniqueUsers}
-            availableDevices={uniqueDevices}
+      {/* SUSPENSE LAZY LOADED PANELS */}
+      <Suspense fallback={<PanelLoadingFallback />}>
+        {/* MODE 1: LOGS PANEL */}
+        {telemetryMode === 'logs' && (
+          <ApiLogsPanel
+            logs={logs}
+            filteredLogs={filteredLogs}
+            paginatedLogs={paginatedLogs}
+            loading={loading}
+            totalCalls={totalCalls}
+            count200={count200}
+            count400={count400}
+            count500={count500}
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
+            setMonitorQuery={setMonitorQuery}
+            deviceFilter={deviceFilter}
+            handleDeviceChange={handleDeviceChange}
+            uniqueDevices={uniqueDevices}
+            userFilter={userFilter}
+            handleUserChange={handleUserChange}
+            uniqueUsers={uniqueUsers}
+            platformScope={platformScope}
+            searchTerm={searchTerm}
+            setSearchTerm={setSearchTerm}
+            logsPage={logsPage}
+            setLogsPage={setLogsPage}
+            logsPageSize={logsPageSize}
+            setLogsPageSize={setLogsPageSize}
             onOpenDetail={openDetail}
+            viewUserTimeline={viewUserTimeline}
           />
-        </section>
-      )}
+        )}
 
-      {/* 6. Issues APM Management Panel */}
-      {telemetryMode === 'issues' && (
-        <IssueManagementPanel
-          selectedApp={selectedFilter !== 'all' ? selectedFilter : ''}
-          activeUserJob={activeUserJob}
-          onViewUserTimeline={viewUserTimeline}
-        />
-      )}
+        {/* MODE 2: CRASHLYTICS PANEL */}
+        {telemetryMode === 'crashes' && (
+          <CrashlyticsPanel
+            crashes={crashes}
+            filteredCrashes={filteredCrashes}
+            paginatedCrashes={paginatedCrashes}
+            loading={loading}
+            totalCrashes={totalCrashes}
+            androidCrashes={androidCrashes}
+            iosCrashes={iosCrashes}
+            fatalCrashes={fatalCrashes}
+            nonFatalCrashes={nonFatalCrashes}
+            crashTab={crashTab}
+            setCrashTab={setCrashTab}
+            setMonitorQuery={setMonitorQuery}
+            deviceFilter={deviceFilter}
+            handleDeviceChange={handleDeviceChange}
+            uniqueDevices={uniqueDevices}
+            userFilter={userFilter}
+            handleUserChange={handleUserChange}
+            uniqueUsers={uniqueUsers}
+            platformScope={platformScope}
+            searchTerm={searchTerm}
+            setSearchTerm={setSearchTerm}
+            crashPage={crashPage}
+            setCrashPage={setCrashPage}
+            crashPageSize={crashPageSize}
+            setCrashPageSize={setCrashPageSize}
+            onOpenDetail={openDetail}
+            viewUserTimeline={viewUserTimeline}
+          />
+        )}
+
+        {/* MODE 3: ANALYTICS PANEL */}
+        {telemetryMode === 'analytics' && (
+          <EventsPanel
+            events={events}
+            filteredEvents={filteredEvents}
+            paginatedEvents={paginatedEvents}
+            loading={loading}
+            totalEvents={totalEvents}
+            customEventCount={customEventCount}
+            screenViewCount={screenViewCount}
+            eventTab={eventTab}
+            setEventTab={setEventTab}
+            setMonitorQuery={setMonitorQuery}
+            deviceFilter={deviceFilter}
+            handleDeviceChange={handleDeviceChange}
+            uniqueDevices={uniqueDevices}
+            userFilter={userFilter}
+            handleUserChange={handleUserChange}
+            uniqueUsers={uniqueUsers}
+            platformScope={platformScope}
+            searchTerm={searchTerm}
+            setSearchTerm={setSearchTerm}
+            eventPage={eventPage}
+            setEventPage={setEventPage}
+            eventPageSize={eventPageSize}
+            setEventPageSize={setEventPageSize}
+            onOpenDetail={openDetail}
+            viewUserTimeline={viewUserTimeline}
+          />
+        )}
+
+        {/* MODE 4: FUNNELS PANEL */}
+        {telemetryMode === 'funnels' && (
+          <EventFunnelsPanel
+            funnelStats={funnelStats}
+            statsLoading={statsLoading}
+            statsError={statsError}
+            activeFunnel={activeFunnel}
+            setActiveFunnel={setActiveFunnel}
+            funnels={funnels}
+            statsRange={statsRange}
+            setStatsRange={setStatsRange}
+            openFunnelSetup={openFunnelSetup}
+          />
+        )}
+
+        {/* 5. User Journey Timeline Panel */}
+        {telemetryMode === 'timeline' && (
+          <section className="log-panel" style={{ background: 'none', border: 'none', padding: 0 }}>
+            <UserJourneyTimeline
+              initialUser={timelineUser}
+              initialDevice={timelineDevice}
+              initialApp={timelineApp || (selectedFilter !== 'all' ? selectedFilter : '')}
+              availableUsers={uniqueUsers}
+              availableDevices={uniqueDevices}
+              onOpenDetail={openDetail}
+            />
+          </section>
+        )}
+
+        {/* 6. Issues APM Management Panel */}
+        {telemetryMode === 'issues' && (
+          <IssueManagementPanel
+            selectedApp={selectedFilter !== 'all' ? selectedFilter : ''}
+            activeUserJob={activeUserJob}
+            onViewUserTimeline={viewUserTimeline}
+          />
+        )}
+      </Suspense>
 
 
       {/* MODAL: DETAIL FOR API LOG */}
@@ -2517,10 +2537,14 @@ export const appConfig: ApplicationConfig = {
       )}
 
       {/* MODAL: TELEGRAM ALERT SETTINGS */}
-      <TelegramSettingsModal
-        isOpen={telegramModalOpen}
-        onClose={() => setTelegramModalOpen(false)}
-      />
+      {telegramModalOpen && (
+        <Suspense fallback={null}>
+          <TelegramSettingsModal
+            isOpen={telegramModalOpen}
+            onClose={() => setTelegramModalOpen(false)}
+          />
+        </Suspense>
+      )}
 
     </div>
   );

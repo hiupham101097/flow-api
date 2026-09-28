@@ -44,6 +44,18 @@ export class ApiLoggerService {
   private static _userName: string | null = null;
   private static _deviceName: string | null = null;
 
+  // Batch Ingestion & Buffer Queue
+  private static _logQueue: any[] = [];
+  private static _crashQueue: any[] = [];
+  private static _eventQueue: any[] = [];
+  private static _flushTimer: any = null;
+  private static _isUnloadHooked = false;
+
+  private static readonly PII_KEYS = [
+    'password', 'pass', 'pwd', 'token', 'access_token', 'refresh_token',
+    'authorization', 'bearer', 'secret', 'credit_card', 'card_number', 'cvv', 'pin', 'otp'
+  ];
+
   constructor() {
     if (!ApiLoggerService._deviceName) {
       ApiLoggerService._deviceName = ApiLoggerService.detectBrowserDevice();
@@ -62,6 +74,99 @@ export class ApiLoggerService {
     } else {
       ApiLoggerService._deviceName = ApiLoggerService.detectBrowserDevice();
     }
+
+    if (typeof window !== 'undefined' && !ApiLoggerService._isUnloadHooked) {
+      ApiLoggerService._isUnloadHooked = true;
+      window.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+          ApiLoggerService.flushBatch();
+        }
+      });
+      window.addEventListener('beforeunload', () => {
+        ApiLoggerService.flushBatch();
+      });
+    }
+  }
+
+  /**
+   * Tự động che dấu dữ liệu nhạy cảm (PII / Passwords / Bearer Tokens / OTP)
+   */
+  public static maskPII(data: any): any {
+    if (!data) return data;
+    if (typeof data === 'string') {
+      try {
+        const parsed = JSON.parse(data);
+        return JSON.stringify(ApiLoggerService.maskPII(parsed));
+      } catch {
+        return data;
+      }
+    }
+    if (typeof data !== 'object') return data;
+    if (Array.isArray(data)) return data.map(item => ApiLoggerService.maskPII(item));
+
+    const sanitized: Record<string, any> = {};
+    for (const [key, value] of Object.entries(data)) {
+      const lowerKey = key.toLowerCase();
+      if (ApiLoggerService.PII_KEYS.some(pii => lowerKey.includes(pii))) {
+        sanitized[key] = '[REDACTED]';
+      } else if (typeof value === 'object' && value !== null) {
+        sanitized[key] = ApiLoggerService.maskPII(value);
+      } else {
+        sanitized[key] = value;
+      }
+    }
+    return sanitized;
+  }
+
+  public static scheduleFlush(): void {
+    if (ApiLoggerService._flushTimer) return;
+    ApiLoggerService._flushTimer = setTimeout(() => {
+      ApiLoggerService.flushBatch();
+    }, 3500);
+  }
+
+  /**
+   * Gom nhóm và gửi toàn bộ logs, crashes, events tồn đọng lên /telemetry/batch
+   */
+  public static flushBatch(): void {
+    if (ApiLoggerService._flushTimer) {
+      clearTimeout(ApiLoggerService._flushTimer);
+      ApiLoggerService._flushTimer = null;
+    }
+
+    if (
+      ApiLoggerService._logQueue.length === 0 &&
+      ApiLoggerService._crashQueue.length === 0 &&
+      ApiLoggerService._eventQueue.length === 0
+    ) {
+      return;
+    }
+
+    const payload = {
+      app_identifier: ApiLoggerService.appId,
+      device_name: ApiLoggerService.deviceName,
+      user_name: ApiLoggerService.userName || undefined,
+      logs: ApiLoggerService._logQueue.splice(0, 50),
+      crashes: ApiLoggerService._crashQueue.splice(0, 20),
+      events: ApiLoggerService._eventQueue.splice(0, 50),
+    };
+
+    const endpoint = `${ApiLoggerService.serverUrl}/telemetry/batch`;
+    const jsonStr = JSON.stringify(payload);
+
+    try {
+      if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+        const blob = new Blob([jsonStr], { type: 'application/json' });
+        if (navigator.sendBeacon(endpoint, blob)) return;
+      }
+
+      fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: jsonStr,
+        keepalive: true,
+      }).catch(() => {});
+    } catch (_) {}
   }
 
   /**
@@ -134,7 +239,7 @@ export class ApiLoggerService {
   }
 
   /**
-   * Gửi Log API lên Cloudflare Dashboard (dùng fetch không đồng bộ, không chặn UI)
+   * Gửi Log API lên Cloudflare Dashboard (Gom nhóm Batch & Khử PII)
    */
   public static sendApiLog(params: {
     endpoint: string;
@@ -151,36 +256,33 @@ export class ApiLoggerService {
     }
 
     try {
-      const payload = {
-        app_id: ApiLoggerService.appId,
+      const safeReq = ApiLoggerService.maskPII(params.requestPayload);
+      const safeRes = ApiLoggerService.maskPII(params.responsePayload);
+
+      const logItem = {
+        app_identifier: ApiLoggerService.appId,
         endpoint: params.endpoint,
         method: params.method.toUpperCase(),
         status_code: params.statusCode,
         duration_ms: params.durationMs,
-        response_payload: typeof params.responsePayload === 'object'
-          ? JSON.stringify(params.responsePayload).slice(0, 4000)
-          : (params.responsePayload ? String(params.responsePayload).slice(0, 4000) : null),
-        request_payload: typeof params.requestPayload === 'object'
-          ? JSON.stringify(params.requestPayload).slice(0, 2000)
-          : (params.requestPayload ? String(params.requestPayload).slice(0, 2000) : null),
+        response_payload: typeof safeRes === 'object'
+          ? JSON.stringify(safeRes).slice(0, 4000)
+          : (safeRes ? String(safeRes).slice(0, 4000) : null),
+        request_payload: typeof safeReq === 'object'
+          ? JSON.stringify(safeReq).slice(0, 2000)
+          : (safeReq ? String(safeReq).slice(0, 2000) : null),
         error_message: params.errorMessage || null,
         device_name: ApiLoggerService.deviceName,
         user_name: ApiLoggerService.userName || undefined,
       };
 
-      if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
-        // Ưu tiên sendBeacon khi có thể để an toàn khi đóng tab
-        const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
-        const ok = navigator.sendBeacon(`${ApiLoggerService.serverUrl}/logs`, blob);
-        if (ok) return;
-      }
+      ApiLoggerService._logQueue.push(logItem);
 
-      fetch(`${ApiLoggerService.serverUrl}/logs`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        keepalive: true,
-      }).catch(() => {});
+      if (ApiLoggerService._logQueue.length >= 10) {
+        ApiLoggerService.flushBatch();
+      } else {
+        ApiLoggerService.scheduleFlush();
+      }
     } catch (_) {}
   }
 
@@ -194,25 +296,29 @@ export class ApiLoggerService {
     deviceInfo?: Record<string, any>;
   }): void {
     try {
-      const payload = {
-        app_id: ApiLoggerService.appId,
+      const crashItem = {
+        app_identifier: ApiLoggerService.appId,
         error_message: params.exception?.message || String(params.exception),
         stack_trace: params.stackTrace || params.exception?.stack || '',
         is_fatal: params.isFatal ? 1 : 0,
         device_info: {
           browser: ApiLoggerService.deviceName,
           url: typeof window !== 'undefined' ? window.location.href : '',
-          ...(params.deviceInfo || {}),
+          ...ApiLoggerService.maskPII(params.deviceInfo || {}),
         },
         user_name: ApiLoggerService.userName || undefined,
       };
 
-      fetch(`${ApiLoggerService.serverUrl}/crashes`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        keepalive: true,
-      }).catch(() => {});
+      ApiLoggerService._crashQueue.push(crashItem);
+
+      // Nếu là Fatal crash thì bắn đi ngay lập tức không chờ buffer
+      if (params.isFatal) {
+        ApiLoggerService.flushBatch();
+      } else if (ApiLoggerService._crashQueue.length >= 5) {
+        ApiLoggerService.flushBatch();
+      } else {
+        ApiLoggerService.scheduleFlush();
+      }
     } catch (_) {}
   }
 
@@ -225,23 +331,24 @@ export class ApiLoggerService {
     options?: { screenName?: string; userId?: string }
   ): void {
     try {
-      const payload = {
-        app_id: ApiLoggerService.appId,
+      const eventItem = {
+        app_identifier: ApiLoggerService.appId,
         event_name: eventName,
         event_type: options?.screenName ? 'screen_view' : 'custom',
         screen_name: options?.screenName,
-        parameters: parameters || {},
+        parameters: ApiLoggerService.maskPII(parameters || {}),
         user_id: options?.userId || ApiLoggerService.userName || undefined,
         device_name: ApiLoggerService.deviceName,
         user_name: ApiLoggerService.userName || undefined,
       };
 
-      fetch(`${ApiLoggerService.serverUrl}/events`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        keepalive: true,
-      }).catch(() => {});
+      ApiLoggerService._eventQueue.push(eventItem);
+
+      if (ApiLoggerService._eventQueue.length >= 10) {
+        ApiLoggerService.flushBatch();
+      } else {
+        ApiLoggerService.scheduleFlush();
+      }
     } catch (_) {}
   }
 

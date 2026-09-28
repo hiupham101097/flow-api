@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
 import 'dart:typed_data';
@@ -222,6 +223,94 @@ class ApiLogger {
     defaultValue: 'https://flow-api.hieupham101097.workers.dev',
   );
 
+  static final List<String> _piiKeys = [
+    'password', 'pass', 'pwd', 'token', 'access_token', 'refresh_token',
+    'authorization', 'bearer', 'secret', 'credit_card', 'card_number', 'cvv', 'pin', 'otp'
+  ];
+
+  /// Tự động lọc bỏ các trường nhạy cảm (PII / token / password / OTP)
+  static dynamic maskPII(dynamic data) {
+    if (data == null) return null;
+    if (data is Map) {
+      final sanitized = <String, dynamic>{};
+      for (final entry in data.entries) {
+        final keyStr = entry.key.toString().toLowerCase();
+        if (_piiKeys.any((pii) => keyStr.contains(pii))) {
+          sanitized[entry.key.toString()] = '[REDACTED]';
+        } else {
+          sanitized[entry.key.toString()] = maskPII(entry.value);
+        }
+      }
+      return sanitized;
+    }
+    if (data is List) {
+      return data.map((item) => maskPII(item)).toList();
+    }
+    if (data is String) {
+      try {
+        final decoded = jsonDecode(data);
+        return jsonEncode(maskPII(decoded));
+      } catch (_) {
+        return data;
+      }
+    }
+    return data;
+  }
+
+  // Batch buffer queue
+  static final List<Map<String, dynamic>> _logBuffer = [];
+  static final List<Map<String, dynamic>> _crashBuffer = [];
+  static final List<Map<String, dynamic>> _eventBuffer = [];
+  static Timer? _flushTimer;
+
+  static void _scheduleFlush() {
+    if (_flushTimer != null) return;
+    _flushTimer = Timer(const Duration(milliseconds: 3500), () {
+      flushBatch();
+    });
+  }
+
+  /// Gom nhóm và gửi toàn bộ telemetry lên endpoint /telemetry/batch
+  static Future<void> flushBatch([String? serverUrl]) async {
+    _flushTimer?.cancel();
+    _flushTimer = null;
+
+    if (_logBuffer.isEmpty && _crashBuffer.isEmpty && _eventBuffer.isEmpty) {
+      return;
+    }
+
+    final targetUrl = serverUrl ?? '$defaultEndpoint/telemetry/batch';
+    final logsToSend = List<Map<String, dynamic>>.from(_logBuffer);
+    final crashesToSend = List<Map<String, dynamic>>.from(_crashBuffer);
+    final eventsToSend = List<Map<String, dynamic>>.from(_eventBuffer);
+
+    _logBuffer.clear();
+    _crashBuffer.clear();
+    _eventBuffer.clear();
+
+    final payload = {
+      'app_identifier': AppTelemetry.appId,
+      'device_name': AppTelemetry.deviceName,
+      'user_name': AppTelemetry.userName,
+      'logs': logsToSend,
+      'crashes': crashesToSend,
+      'events': eventsToSend,
+    };
+
+    try {
+      await http.post(
+        Uri.parse(targetUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      );
+    } catch (_) {
+      // Khi mất mạng hoặc timeout, giữ lại trong hàng đợi để flush lần sau
+      if (_logBuffer.length < 100) _logBuffer.addAll(logsToSend);
+      if (_crashBuffer.length < 50) _crashBuffer.addAll(crashesToSend);
+      if (_eventBuffer.length < 100) _eventBuffer.addAll(eventsToSend);
+    }
+  }
+
   static void record({
     required String endpoint,
     required String method,
@@ -235,16 +324,15 @@ class ApiLogger {
     String? userName,
     String? serverUrl,
   }) {
-    // Avoid sending excessively large payloads (> 200 KB)
-    dynamic safeRequest = _sanitizePayload(requestPayload);
-    dynamic safeResponse = _sanitizePayload(responsePayload);
+    // Avoid sending excessively large payloads (> 200 KB) and mask PII
+    dynamic safeRequest = maskPII(_sanitizePayload(requestPayload));
+    dynamic safeResponse = maskPII(_sanitizePayload(responsePayload));
 
-    final targetUrl = serverUrl ?? '$defaultEndpoint/logs';
     final effectiveDevice = (deviceName != null && deviceName.isNotEmpty) ? deviceName : AppTelemetry.deviceName;
     final effectiveUser = (userName != null && userName.isNotEmpty) ? userName : AppTelemetry.userName;
 
-    final payload = {
-      'app_id': appId,
+    final logItem = {
+      'app_identifier': appId,
       'endpoint': endpoint,
       'method': method.toUpperCase(),
       'status_code': statusCode,
@@ -256,13 +344,13 @@ class ApiLogger {
       if (effectiveUser != null && effectiveUser.isNotEmpty) 'user_name': effectiveUser,
     };
 
-    http
-        .post(
-          Uri.parse(targetUrl),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode(payload),
-        )
-        .catchError((_) => http.Response('', 500));
+    _logBuffer.add(logItem);
+
+    if (_logBuffer.length >= 10) {
+      flushBatch(serverUrl);
+    } else {
+      _scheduleFlush();
+    }
   }
 
   static dynamic _sanitizePayload(dynamic payload) {
@@ -290,6 +378,7 @@ class AppTelemetry {
   static String _defaultAppId = 'default_app';
   static String? _deviceName;
   static String? _userName;
+  static String get appId => _defaultAppId;
   static const String defaultEndpoint = String.fromEnvironment(
     'API_MONITOR_URL',
     defaultValue: 'https://flow-api.hieupham101097.workers.dev',
@@ -395,24 +484,26 @@ class AppTelemetry {
       mergedDeviceInfo['device_name'] = effectiveDevice;
     }
 
-    final payload = {
-      'app_id': effectiveAppId,
+    final crashItem = {
+      'app_identifier': effectiveAppId,
       'error_message': exception.toString(),
       'stack_trace': stack?.toString(),
-      'is_fatal': isFatal,
-      'device_info': mergedDeviceInfo,
+      'is_fatal': isFatal ? 1 : 0,
+      'device_info': ApiLogger.maskPII(mergedDeviceInfo),
       'os': osName,
       'platform': platformId,
-      'custom_attributes': customAttributes,
+      'custom_attributes': ApiLogger.maskPII(customAttributes),
     };
 
-    http
-        .post(
-          Uri.parse(targetUrl),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode(payload),
-        )
-        .catchError((_) => http.Response('', 500));
+    ApiLogger._crashBuffer.add(crashItem);
+
+    if (isFatal) {
+      ApiLogger.flushBatch(serverUrl);
+    } else if (ApiLogger._crashBuffer.length >= 5) {
+      ApiLogger.flushBatch(serverUrl);
+    } else {
+      ApiLogger._scheduleFlush();
+    }
   }
 
   /// Ghi nhận Sự kiện Analytics (Event tracking song song với Firebase Analytics)
@@ -426,7 +517,6 @@ class AppTelemetry {
     String? appId,
     String? serverUrl,
   }) {
-    final targetUrl = serverUrl ?? '$defaultEndpoint/events';
     final effectiveAppId = appId ?? _defaultAppId;
     final effectiveDevice = deviceName ?? AppTelemetry.deviceName;
 
@@ -435,23 +525,23 @@ class AppTelemetry {
       mergedDeviceInfo['device_name'] = effectiveDevice;
     }
 
-    final payload = {
-      'app_id': effectiveAppId,
+    final eventItem = {
+      'app_identifier': effectiveAppId,
       'event_name': name,
       'event_type': 'event',
       'screen_name': screenName,
       'user_id': userId,
-      'parameters': parameters,
+      'parameters': ApiLogger.maskPII(parameters),
       'device_info': mergedDeviceInfo,
     };
 
-    http
-        .post(
-          Uri.parse(targetUrl),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode(payload),
-        )
-        .catchError((_) => http.Response('', 500));
+    ApiLogger._eventBuffer.add(eventItem);
+
+    if (ApiLogger._eventBuffer.length >= 10) {
+      ApiLogger.flushBatch(serverUrl);
+    } else {
+      ApiLogger._scheduleFlush();
+    }
   }
 
   /// Ghi nhận chuyển màn hình (Screen View)
