@@ -117,7 +117,12 @@ export default function AdminLayout() {
                 )}
               </svg>
             </span>
-            {!isCollapsed && <span className="side-collapse-text">Thu gọn menu</span>}
+            {!isCollapsed && (
+              <>
+                <span className="side-collapse-text">Thu gọn</span>
+                <kbd className="kbd-hint" style={{ marginLeft: 'auto' }}>Ctrl B</kbd>
+              </>
+            )}
             {isCollapsed && <span className="side-tooltip">Mở rộng (Ctrl+B)</span>}
           </button>
         </div>

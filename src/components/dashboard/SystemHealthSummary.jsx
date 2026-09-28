@@ -34,140 +34,120 @@ function SystemHealthSummary({ selectedApp = '', platformScope = 'app' }) {
 
   if (!health) return null;
 
+  const isFatalAlert = (health.fatal_crashes || 0) > 0;
+  const isHighSuccess = (health.success_rate || 0) >= 98;
+  const isModerateSuccess = (health.success_rate || 0) >= 90;
+
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
-        gap: '0.85rem',
-        marginBottom: '1.25rem',
-      }}
-    >
-      {/* 1. Success Rate */}
-      <div
-        style={{
-          background: 'var(--surface)',
-          border: '1px solid var(--line)',
-          borderRadius: '10px',
-          padding: '0.75rem 1rem',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '0.2rem',
-        }}
-      >
-        <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>Tỷ lệ thành công (24h)</span>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem' }}>
-          <strong style={{ fontSize: '1.35rem', color: health.success_rate >= 95 ? '#61e5bd' : '#ffb300' }}>
+    <div className="telemetry-health-grid" aria-label="Tóm tắt sức khỏe hệ thống">
+      {/* 1. Tỷ lệ thành công */}
+      <div className="health-card health-card-success">
+        <div className="health-card-header">
+          <span className="health-card-title">Tỷ lệ thành công (24h)</span>
+          <span className="health-card-icon" aria-hidden="true">🎯</span>
+        </div>
+        <div className="health-card-value-row">
+          <span
+            className="health-card-value"
+            style={{
+              color: isHighSuccess ? 'var(--success)' : isModerateSuccess ? 'var(--warning)' : 'var(--danger)',
+            }}
+          >
             {health.success_rate}%
-          </strong>
+          </span>
         </div>
-        <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
-          {health.server_errors > 0 ? `${health.server_errors} lỗi máy chủ (5xx)` : 'Hoạt động hoàn hảo'}
-        </span>
+        <div className="health-card-footer">
+          <span className={`health-card-chip ${health.server_errors > 0 ? 'chip-danger' : 'chip-success'}`}>
+            {health.server_errors > 0 ? `${health.server_errors} lỗi 5xx` : 'Hoạt động tối ưu'}
+          </span>
+          <span>trên tổng cuộc gọi</span>
+        </div>
       </div>
 
-      {/* 2. Avg Latency */}
-      <div
-        style={{
-          background: 'var(--surface)',
-          border: '1px solid var(--line)',
-          borderRadius: '10px',
-          padding: '0.75rem 1rem',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '0.2rem',
-        }}
-      >
-        <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>Độ trễ trung bình (24h)</span>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.2rem' }}>
-          <strong style={{ fontSize: '1.35rem', color: 'var(--text)' }}>
-            {health.avg_latency_ms}
-          </strong>
-          <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>ms</span>
+      {/* 2. Độ trễ trung bình */}
+      <div className="health-card health-card-latency">
+        <div className="health-card-header">
+          <span className="health-card-title">Độ trễ trung bình (24h)</span>
+          <span className="health-card-icon" aria-hidden="true">⚡</span>
         </div>
-        <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
-          Thời gian máy chủ phản hồi
-        </span>
+        <div className="health-card-value-row">
+          <span className="health-card-value">{health.avg_latency_ms}</span>
+          <span className="health-card-unit">ms</span>
+        </div>
+        <div className="health-card-footer">
+          <span
+            className={`health-card-chip ${
+              health.avg_latency_ms < 300
+                ? 'chip-success'
+                : health.avg_latency_ms < 1000
+                ? 'chip-info'
+                : 'chip-danger'
+            }`}
+          >
+            {health.avg_latency_ms < 300 ? 'Cực nhanh' : health.avg_latency_ms < 1000 ? 'Bình thường' : 'Chậm'}
+          </span>
+          <span>Phản hồi máy chủ</span>
+        </div>
       </div>
 
-      {/* 3. Fatal Crashes / Runtime Errors */}
-      <div
-        style={{
-          background: health.fatal_crashes > 0 ? 'rgba(255, 119, 133, 0.08)' : 'var(--surface)',
-          border: `1px solid ${health.fatal_crashes > 0 ? 'rgba(255, 119, 133, 0.3)' : 'var(--line)'}`,
-          borderRadius: '10px',
-          padding: '0.75rem 1rem',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '0.2rem',
-        }}
-      >
-        <span style={{ fontSize: '0.76rem', color: health.fatal_crashes > 0 ? '#ff7785' : 'var(--text-muted)' }}>
-          {platformScope === 'web' ? 'Sự cố Runtime / JS (24h)' : 'Sự cố sập app (24h)'}
-        </span>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem' }}>
-          <strong style={{ fontSize: '1.35rem', color: health.fatal_crashes > 0 ? '#ff4d61' : '#61e5bd' }}>
+      {/* 3. Sự cố Fatal / Runtime */}
+      <div className={`health-card health-card-crashes ${isFatalAlert ? 'is-alert' : ''}`}>
+        <div className="health-card-header">
+          <span className="health-card-title">
+            {platformScope === 'web' ? 'Sự cố Runtime / JS (24h)' : 'Sự cố sập app (24h)'}
+          </span>
+          <span className="health-card-icon" aria-hidden="true">🔥</span>
+        </div>
+        <div className="health-card-value-row">
+          <span className="health-card-value" style={{ color: isFatalAlert ? 'var(--danger)' : 'var(--success)' }}>
             {health.fatal_crashes}
-          </strong>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>/ {health.total_crashes} sự cố</span>
+          </span>
+          <span className="health-card-unit">/ {health.total_crashes} sự cố</span>
         </div>
-        <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
-          {health.fatal_crashes > 0
-            ? (platformScope === 'web' ? 'Lỗi JS sập trang / runtime' : 'Cần khắc phục ngay')
-            : (platformScope === 'web' ? 'Không có lỗi JS runtime' : 'Không có fatal crash')}
-        </span>
+        <div className="health-card-footer">
+          <span className={`health-card-chip ${isFatalAlert ? 'chip-danger' : 'chip-success'}`}>
+            {isFatalAlert ? 'Cần xử lý ngay' : 'Không có fatal crash'}
+          </span>
+          <span>{platformScope === 'web' ? 'Ngoại lệ JS runtime' : 'Crashlytics'}</span>
+        </div>
       </div>
 
-      {/* 4. Total Calls */}
-      <div
-        style={{
-          background: 'var(--surface)',
-          border: '1px solid var(--line)',
-          borderRadius: '10px',
-          padding: '0.75rem 1rem',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '0.2rem',
-        }}
-      >
-        <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
-          {platformScope === 'web' ? 'Lưu lượng Web API (24h)' : 'Lưu lượng API (24h)'}
-        </span>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem' }}>
-          <strong style={{ fontSize: '1.35rem', color: 'var(--text)' }}>
-            {health.total_logs}
-          </strong>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>yêu cầu</span>
+      {/* 4. Tổng lưu lượng API */}
+      <div className="health-card health-card-logs">
+        <div className="health-card-header">
+          <span className="health-card-title">
+            {platformScope === 'web' ? 'Lưu lượng Web API (24h)' : 'Lưu lượng API (24h)'}
+          </span>
+          <span className="health-card-icon" aria-hidden="true">📡</span>
         </div>
-        <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
-          Ghi nhận trên Cloudflare
-        </span>
+        <div className="health-card-value-row">
+          <span className="health-card-value">{health.total_logs?.toLocaleString() || 0}</span>
+          <span className="health-card-unit">requests</span>
+        </div>
+        <div className="health-card-footer">
+          <span className="health-card-chip chip-info">Cloudflare Edge</span>
+          <span>Được log đầy đủ</span>
+        </div>
       </div>
 
-      {/* 5. Total Events */}
-      <div
-        style={{
-          background: 'var(--surface)',
-          border: '1px solid var(--line)',
-          borderRadius: '10px',
-          padding: '0.75rem 1rem',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '0.2rem',
-        }}
-      >
-        <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
-          {platformScope === 'web' ? 'Sự kiện Web (24h)' : 'Sự kiện Analytics (24h)'}
-        </span>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.35rem' }}>
-          <strong style={{ fontSize: '1.35rem', color: 'var(--accent)' }}>
-            {health.total_events}
-          </strong>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>events</span>
+      {/* 5. Tổng sự kiện Analytics */}
+      <div className="health-card health-card-events">
+        <div className="health-card-header">
+          <span className="health-card-title">
+            {platformScope === 'web' ? 'Tương tác Web (24h)' : 'Sự kiện Analytics (24h)'}
+          </span>
+          <span className="health-card-icon" aria-hidden="true">📊</span>
         </div>
-        <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
-          {platformScope === 'web' ? 'Tương tác & Page Views' : 'Hành vi người dùng'}
-        </span>
+        <div className="health-card-value-row">
+          <span className="health-card-value" style={{ color: 'var(--purple)' }}>
+            {health.total_events?.toLocaleString() || 0}
+          </span>
+          <span className="health-card-unit">events</span>
+        </div>
+        <div className="health-card-footer">
+          <span className="health-card-chip chip-info">User Tracking</span>
+          <span>{platformScope === 'web' ? 'Page Views & Clicks' : 'Hành vi & Phễu'}</span>
+        </div>
       </div>
     </div>
   );

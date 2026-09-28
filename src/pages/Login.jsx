@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import '../styles/global.css';
 
 function Login() {
   const navigate = useNavigate();
-  const { user, isAuthenticated, login } = useAuth();
+  const { isAuthenticated, login } = useAuth();
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -54,144 +55,105 @@ function Login() {
     setError(null);
   };
 
-  return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'radial-gradient(ellipse at 50% 20%, #111d2e 0%, #070c12 70%)',
-        padding: '1.5rem',
-        position: 'relative',
-        overflow: 'hidden',
-      }}
-    >
-      {/* Background ambient glow */}
-      <div
-        style={{
-          position: 'absolute',
-          width: '500px',
-          height: '500px',
-          borderRadius: '50%',
-          background: 'radial-gradient(circle, rgba(94, 126, 234, 0.15) 0%, transparent 70%)',
-          top: '-150px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          pointerEvents: 'none',
-        }}
-      />
+  const isWebDev = username === 'web-dev';
+  const isAppDev = username === 'app-dev';
 
-      <div
-        style={{
-          width: 'min(460px, 100%)',
-          background: 'rgba(13, 21, 31, 0.85)',
-          backdropFilter: 'blur(16px)',
-          WebkitBackdropFilter: 'blur(16px)',
-          border: '1px solid rgba(125, 156, 255, 0.2)',
-          borderRadius: '20px',
-          boxShadow: '0 25px 60px -15px rgba(0, 0, 0, 0.85), 0 0 35px rgba(94, 126, 234, 0.12)',
-          padding: '2.5rem 2.25rem',
-          position: 'relative',
-          zIndex: 2,
-        }}
-      >
+  return (
+    <div className="auth-page">
+      {/* Background ambient lighting */}
+      <div className="auth-ambient-glow" aria-hidden="true" />
+
+      <div className="auth-card">
         {/* Brand Header */}
-        <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <div
-            style={{
-              width: '52px',
-              height: '52px',
-              borderRadius: '14px',
-              background: 'linear-gradient(135deg, #5e7eea 0%, #7d9cff 100%)',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 8px 20px rgba(94, 126, 234, 0.4)',
-              marginBottom: '1rem',
-            }}
-          >
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <div style={{ textAlign: 'center', marginBottom: '1.75rem' }}>
+          <div className="auth-brand-icon">
+            <svg
+              width="28"
+              height="28"
+              viewBox="0 0 24 24"
+              fill="none"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
               <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
             </svg>
           </div>
 
-          <h1 style={{ fontSize: '1.5rem', fontWeight: 800, margin: 0, color: '#fff', letterSpacing: '-0.02em' }}>
+          <h1 style={{ fontSize: '1.55rem', fontWeight: 800, margin: 0, color: 'var(--text)', letterSpacing: '-0.025em' }}>
             Gden Flow Telemetry
           </h1>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem', marginTop: '0.45rem', lineHeight: 1.5 }}>
-            Đăng nhập để vào bảng điều khiển giám sát API Logs & Telemetry
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.4rem', lineHeight: 1.5 }}>
+            Bảng điều khiển giám sát API Logs, Crashlytics & Observability
           </p>
         </div>
 
-        {/* Quick Role Selection Buttons */}
-        <div style={{ marginBottom: '1.5rem' }}>
-          <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-dim)', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            ⚡ Chọn nhanh tài khoản phân hệ:
+        {/* Quick Role Selection Cards */}
+        <div style={{ marginBottom: '1.4rem' }}>
+          <div
+            style={{
+              fontSize: '0.72rem',
+              fontWeight: 700,
+              color: 'var(--text-dim)',
+              marginBottom: '0.55rem',
+              textTransform: 'uppercase',
+              letterSpacing: '0.06em',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            }}
+          >
+            <span>⚡ Chọn nhanh phân hệ:</span>
+            <span style={{ fontSize: '0.68rem', fontWeight: 500, color: 'var(--text-dim)' }}>Mật khẩu: 123qwe</span>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+
+          <div className="auth-role-grid">
             <button
               type="button"
               onClick={() => handleQuickFill('web')}
-              style={{
-                padding: '0.65rem 0.75rem',
-                borderRadius: '10px',
-                border: username === 'web-dev' ? '1px solid #22d3ee' : '1px solid var(--line)',
-                background: username === 'web-dev' ? 'rgba(34, 211, 238, 0.12)' : 'var(--surface)',
-                color: username === 'web-dev' ? '#67e8f9' : 'var(--text-muted)',
-                cursor: 'pointer',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'flex-start',
-                gap: '0.15rem',
-                transition: 'all 0.18s ease',
-              }}
+              className={`auth-role-card ${isWebDev ? 'active-web' : ''}`}
+              title="Điền tự động tài khoản Web Developer"
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontWeight: 700, fontSize: '0.84rem' }}>
-                <span>🌐</span> <span>web-dev</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 700, fontSize: '0.86rem', color: isWebDev ? '#38bdf8' : 'var(--text)' }}>
+                <span>🌐</span>
+                <span>web-dev</span>
+                {isWebDev && <span style={{ marginLeft: 'auto', fontSize: '0.75rem' }}>✓</span>}
               </div>
-              <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>Quản lý Web</span>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>Quản lý Web App & Portal</span>
             </button>
 
             <button
               type="button"
               onClick={() => handleQuickFill('app')}
-              style={{
-                padding: '0.65rem 0.75rem',
-                borderRadius: '10px',
-                border: username === 'app-dev' ? '1px solid #a78bfa' : '1px solid var(--line)',
-                background: username === 'app-dev' ? 'rgba(167, 139, 250, 0.12)' : 'var(--surface)',
-                color: username === 'app-dev' ? '#c4b5fd' : 'var(--text-muted)',
-                cursor: 'pointer',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'flex-start',
-                gap: '0.15rem',
-                transition: 'all 0.18s ease',
-              }}
+              className={`auth-role-card ${isAppDev ? 'active-app' : ''}`}
+              title="Điền tự động tài khoản Mobile Developer"
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontWeight: 700, fontSize: '0.84rem' }}>
-                <span>📱</span> <span>app-dev</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 700, fontSize: '0.86rem', color: isAppDev ? '#c084fc' : 'var(--text)' }}>
+                <span>📱</span>
+                <span>app-dev</span>
+                {isAppDev && <span style={{ marginLeft: 'auto', fontSize: '0.75rem' }}>✓</span>}
               </div>
-              <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>Quản lý Flutter App</span>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>Quản lý Flutter App</span>
             </button>
           </div>
         </div>
 
-        {/* Error notice */}
+        {/* Error notification */}
         {error && (
           <div
             style={{
               padding: '0.75rem 1rem',
               borderRadius: '10px',
-              background: 'rgba(255, 119, 133, 0.12)',
-              border: '1px solid rgba(255, 119, 133, 0.35)',
-              color: '#ff7785',
-              fontSize: '0.84rem',
+              background: 'rgba(244, 63, 94, 0.12)',
+              border: '1px solid rgba(244, 63, 94, 0.35)',
+              color: '#fb7185',
+              fontSize: '0.82rem',
               marginBottom: '1.25rem',
               display: 'flex',
               alignItems: 'center',
-              gap: '0.5rem',
+              gap: '0.55rem',
+              animation: 'authCardEntrance 200ms ease',
             }}
           >
             <span>⚠️</span>
@@ -199,18 +161,19 @@ function Login() {
           </div>
         )}
 
-        {/* Form */}
+        {/* Login Form */}
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.15rem' }}>
           <div>
             <label
               htmlFor="login-username"
-              style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.45rem' }}
+              style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.45rem' }}
             >
               Tên đăng nhập (Username)
             </label>
-            <div style={{ position: 'relative' }}>
+            <div className="auth-input-group">
               <input
                 id="login-username"
+                className="auth-input"
                 type="text"
                 required
                 autoFocus
@@ -221,20 +184,8 @@ function Login() {
                   setUsername(e.target.value);
                   setError(null);
                 }}
-                style={{
-                  width: '100%',
-                  padding: '0.75rem 1rem 0.75rem 2.5rem',
-                  borderRadius: '10px',
-                  background: 'var(--surface-raised)',
-                  border: '1px solid var(--line)',
-                  color: 'var(--text)',
-                  fontSize: '0.92rem',
-                  outline: 'none',
-                }}
               />
-              <span style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', opacity: 0.6 }}>
-                👤
-              </span>
+              <span className="auth-input-icon">👤</span>
             </div>
           </div>
 
@@ -242,18 +193,20 @@ function Login() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.45rem' }}>
               <label
                 htmlFor="login-password"
-                style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-muted)' }}
+                style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}
               >
                 Mật khẩu (Password)
               </label>
-              <span style={{ fontSize: '0.74rem', color: 'var(--text-dim)' }}>
-                Mặc định: <code>123qwe</code>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
+                Mặc định: <code style={{ fontFamily: 'var(--font-mono)' }}>123qwe</code>
               </span>
             </div>
 
-            <div style={{ position: 'relative' }}>
+            <div className="auth-input-group">
               <input
                 id="login-password"
+                className="auth-input"
+                style={{ paddingRight: '2.8rem' }}
                 type={showPassword ? 'text' : 'password'}
                 required
                 autoComplete="current-password"
@@ -263,20 +216,8 @@ function Login() {
                   setPassword(e.target.value);
                   setError(null);
                 }}
-                style={{
-                  width: '100%',
-                  padding: '0.75rem 2.8rem 0.75rem 2.5rem',
-                  borderRadius: '10px',
-                  background: 'var(--surface-raised)',
-                  border: '1px solid var(--line)',
-                  color: 'var(--text)',
-                  fontSize: '0.92rem',
-                  outline: 'none',
-                }}
               />
-              <span style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', opacity: 0.6 }}>
-                🔒
-              </span>
+              <span className="auth-input-icon">🔒</span>
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
@@ -289,10 +230,11 @@ function Login() {
                   border: 'none',
                   color: 'var(--text-dim)',
                   cursor: 'pointer',
-                  fontSize: '0.85rem',
-                  padding: '0.2rem',
+                  fontSize: '0.9rem',
+                  padding: '0.25rem',
                 }}
                 title={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
               >
                 {showPassword ? '👁️‍🗨️' : '👁️'}
               </button>
@@ -304,19 +246,11 @@ function Login() {
             disabled={loading}
             className="primary-btn"
             style={{
-              marginTop: '0.5rem',
-              padding: '0.82rem',
+              marginTop: '0.4rem',
+              padding: '0.85rem',
               borderRadius: '10px',
-              fontSize: '0.95rem',
+              fontSize: '0.92rem',
               fontWeight: 700,
-              background: 'linear-gradient(135deg, #5e7eea 0%, #7d9cff 100%)',
-              border: 'none',
-              color: '#fff',
-              cursor: 'pointer',
-              boxShadow: '0 6px 18px rgba(94, 126, 234, 0.35)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
               gap: '0.5rem',
             }}
           >
@@ -325,9 +259,19 @@ function Login() {
         </form>
 
         {/* Footer info */}
-        <div style={{ marginTop: '1.75rem', paddingTop: '1.25rem', borderTop: '1px solid var(--line)', fontSize: '0.78rem', color: 'var(--text-dim)', textAlign: 'center', lineHeight: 1.5 }}>
-          <div>Tài khoản <b>web-dev</b> → Vào thẳng Quản lý Web</div>
-          <div style={{ marginTop: '0.2rem' }}>Tài khoản <b>app-dev</b> → Vào thẳng Quản lý Flutter App</div>
+        <div
+          style={{
+            marginTop: '1.65rem',
+            paddingTop: '1.15rem',
+            borderTop: '1px solid var(--line)',
+            fontSize: '0.75rem',
+            color: 'var(--text-dim)',
+            textAlign: 'center',
+            lineHeight: 1.5,
+          }}
+        >
+          <div>Tài khoản <strong>web-dev</strong> → Quản lý Web Telemetry</div>
+          <div style={{ marginTop: '0.15rem' }}>Tài khoản <strong>app-dev</strong> → Quản lý Flutter App Telemetry</div>
         </div>
       </div>
     </div>
