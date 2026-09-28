@@ -244,8 +244,19 @@ function Dashboard() {
 
   // Danh sách chỉ tải bản rút gọn (payload cắt 300 ký tự, không có request_payload
   // và stack trace đầy đủ) để giảm dữ liệu đọc. Bản đầy đủ chỉ lấy khi mở chi tiết.
-  const openDetail = async (type, row, setter) => {
-    setter(row);
+  const openDetail = async (type, row, customSetter) => {
+    const setter =
+      typeof customSetter === 'function'
+        ? customSetter
+        : type === 'crash'
+        ? setSelectedCrash
+        : type === 'event'
+        ? setSelectedEvent
+        : setSelectedLog;
+
+    if (typeof setter === 'function') {
+      setter(row);
+    }
     if (!row?.id) return;
     try {
       const response = await fetch(
@@ -256,7 +267,9 @@ function Dashboard() {
       const full = await response.json();
       if (!full || !full.id) return;
       // Người dùng có thể đã đóng hoặc mở bản ghi khác trong lúc chờ
-      setter((current) => (current && current.id === full.id ? { ...current, ...full } : current));
+      if (typeof setter === 'function') {
+        setter((current) => (current && current.id === full.id ? { ...current, ...full } : current));
+      }
     } catch (err) {
       console.warn('Không tải được bản đầy đủ, giữ bản rút gọn:', err);
     }
@@ -2074,7 +2087,7 @@ export const appConfig: ApplicationConfig = {
                 </div>
                 <div>
                   <span className="meta-label">Thời điểm ghi nhận</span>
-                  <strong className="meta-value">{formatDate(selectedLog.created_at)}</strong>
+                  <strong className="meta-value">{formatVietnamDateTime(selectedLog.created_at)}</strong>
                 </div>
               </div>
 
@@ -2216,7 +2229,7 @@ export const appConfig: ApplicationConfig = {
                 </div>
                 <div>
                   <span className="meta-label">Thời điểm xảy ra</span>
-                  <strong className="meta-value">{formatDate(selectedCrash.created_at)}</strong>
+                  <strong className="meta-value">{formatVietnamDateTime(selectedCrash.created_at)}</strong>
                 </div>
               </div>
 
@@ -2323,7 +2336,7 @@ export const appConfig: ApplicationConfig = {
                 </div>
                 <div>
                   <span className="meta-label">Thời điểm ghi nhận</span>
-                  <strong className="meta-value">{formatDate(selectedEvent.created_at)}</strong>
+                  <strong className="meta-value">{formatVietnamDateTime(selectedEvent.created_at)}</strong>
                 </div>
               </div>
 

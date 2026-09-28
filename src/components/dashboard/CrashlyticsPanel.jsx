@@ -72,11 +72,13 @@ const CrashRow = memo(function CrashRow({
           title="Xem toàn bộ hành trình trước khi xảy ra sự cố này"
           onClick={(event) => {
             event.stopPropagation();
-            viewUserTimeline({
-              user: crash.user_name || '',
-              device: (typeof deviceInfoParsed === 'object' ? deviceInfoParsed.model || deviceInfoParsed.device_name : '') || '',
-              app: crash.app_identifier || '',
-            });
+            if (typeof onViewTimeline === 'function') {
+              onViewTimeline({
+                user: crash.user_name || '',
+                device: (typeof deviceInfoParsed === 'object' ? deviceInfoParsed.model || deviceInfoParsed.device_name : '') || '',
+                app: crash.app_identifier || '',
+              });
+            }
           }}
         >
           🐾
