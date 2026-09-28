@@ -108,11 +108,10 @@ const LogRow = memo(function LogRow({
         </span>
       </td>
       <td className="duration-cell">{log.duration_ms || 0} ms</td>
-      <td className="action-cell" style={{ display: 'flex', gap: '0.35rem', justifyContent: 'flex-end' }}>
+      <td className="action-cell" style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end', alignItems: 'center' }}>
         <button
           type="button"
-          className="view-btn"
-          style={{ fontSize: '0.72rem', padding: '0.25rem 0.45rem', background: 'rgba(125, 156, 255, 0.12)', color: 'var(--accent)' }}
+          className="timeline-quick-btn"
           title="Xem toàn bộ hành trình của User / Thiết bị này"
           onClick={(event) => {
             event.stopPropagation();
@@ -128,13 +127,12 @@ const LogRow = memo(function LogRow({
         <button
           type="button"
           className="view-btn"
-          style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}
           onClick={(event) => {
             event.stopPropagation();
             onOpenDetail('log', log);
           }}
         >
-          Chi tiết
+          Chi tiết →
         </button>
       </td>
     </tr>

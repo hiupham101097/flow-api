@@ -78,11 +78,11 @@ const EventRow = memo(function EventRow({
           <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem' }}>Không có params</span>
         )}
       </td>
-      <td className="action-cell events-action-cell">
+      <td className="action-cell events-action-cell" style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
         <button
           type="button"
-          className="view-btn"
-          style={{ fontSize: '0.72rem', padding: '0.25rem 0.45rem', background: 'rgba(125, 156, 255, 0.12)', color: 'var(--accent)' }}
+          className="timeline-quick-btn"
+          style={{ marginRight: '0.4rem' }}
           title="Xem toàn bộ hành trình của người dùng này"
           onClick={(e) => {
             e.stopPropagation();
@@ -98,13 +98,12 @@ const EventRow = memo(function EventRow({
         <button
           type="button"
           className="view-btn"
-          style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}
           onClick={(e) => {
             e.stopPropagation();
             onOpenDetail('event', event);
           }}
         >
-          Chi tiết
+          Chi tiết →
         </button>
       </td>
     </tr>

@@ -65,11 +65,10 @@ const CrashRow = memo(function CrashRow({
           )}
         </div>
       </td>
-      <td className="action-cell" style={{ display: 'flex', gap: '0.35rem', justifyContent: 'flex-end' }}>
+      <td className="action-cell" style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end', alignItems: 'center' }}>
         <button
           type="button"
-          className="view-btn"
-          style={{ fontSize: '0.72rem', padding: '0.25rem 0.45rem', background: 'rgba(125, 156, 255, 0.12)', color: 'var(--accent)' }}
+          className="timeline-quick-btn"
           title="Xem toàn bộ hành trình trước khi xảy ra sự cố này"
           onClick={(event) => {
             event.stopPropagation();
@@ -85,13 +84,12 @@ const CrashRow = memo(function CrashRow({
         <button
           type="button"
           className="view-btn"
-          style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}
           onClick={(event) => {
             event.stopPropagation();
             onOpenDetail('crash', crash);
           }}
         >
-          Stack Trace
+          Stack Trace →
         </button>
       </td>
     </tr>
