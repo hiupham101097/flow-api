@@ -136,7 +136,13 @@ function IssueDetailModal({ issueId, isOpen, onClose, onStatusChanged, onViewUse
     }
   };
 
-  const getStatusBadgeStyle = (statusCode) => {
+  const getStatusBadgeStyle = (statusCode, errorType = null) => {
+    if (errorType === 'timeout') {
+      return { bg: 'rgba(255, 119, 133, 0.15)', color: '#ff7785', border: 'rgba(255, 119, 133, 0.35)', label: 'TIMEOUT' };
+    }
+    if (errorType === 'network_error') {
+      return { bg: 'rgba(255, 119, 133, 0.15)', color: '#ff7785', border: 'rgba(255, 119, 133, 0.35)', label: 'NETWORK' };
+    }
     const code = Number(statusCode) || 0;
     if (code >= 500) {
       return { bg: 'rgba(255, 119, 133, 0.15)', color: '#ff7785', border: 'rgba(255, 119, 133, 0.35)', label: `${code} Server Error` };
@@ -480,12 +486,12 @@ function IssueDetailModal({ issueId, isOpen, onClose, onStatusChanged, onViewUse
                         borderRadius: '4px',
                         fontSize: '0.76rem',
                         fontWeight: 700,
-                        backgroundColor: getStatusBadgeStyle(failedRequest.status_code).bg,
-                        color: getStatusBadgeStyle(failedRequest.status_code).color,
-                        border: `1px solid ${getStatusBadgeStyle(failedRequest.status_code).border}`,
+                        backgroundColor: getStatusBadgeStyle(failedRequest.status_code, failedRequest.error_type).bg,
+                        color: getStatusBadgeStyle(failedRequest.status_code, failedRequest.error_type).color,
+                        border: `1px solid ${getStatusBadgeStyle(failedRequest.status_code, failedRequest.error_type).border}`,
                       }}
                     >
-                      {getStatusBadgeStyle(failedRequest.status_code).label}
+                      {getStatusBadgeStyle(failedRequest.status_code, failedRequest.error_type).label}
                     </span>
                   </div>
 
@@ -534,6 +540,20 @@ function IssueDetailModal({ issueId, isOpen, onClose, onStatusChanged, onViewUse
                       {issue.app_identifier || 'Chung'}
                     </code>
                   </div>
+                  {failedRequest.error_type && (
+                    <div>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'block' }}>PHÂN LOẠI LỖI</span>
+                      <strong style={{ fontSize: '0.84rem', color: '#ff7785' }}>{failedRequest.error_type}</strong>
+                    </div>
+                  )}
+                  {(failedRequest.server_request_id || failedRequest.request_id) && (
+                    <div>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'block' }}>REQUEST ID</span>
+                      <code style={{ fontSize: '0.78rem', color: 'var(--accent)', wordBreak: 'break-all' }}>
+                        {failedRequest.server_request_id || failedRequest.request_id}
+                      </code>
+                    </div>
+                  )}
                 </div>
 
                 {/* Error message callout */}
@@ -799,7 +819,7 @@ function IssueDetailModal({ issueId, isOpen, onClose, onStatusChanged, onViewUse
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
                     {breadcrumbs.slice(-4).map((b, idx) => {
                       const isLast = idx === breadcrumbs.slice(-4).length - 1;
-                      const isError = Number(b.status_code) >= 500;
+                      const isError = Number(b.status_code) >= 500 || b.error_type === 'timeout' || b.error_type === 'network_error';
                       return (
                         <div
                           key={b.id || idx}
@@ -853,11 +873,11 @@ function IssueDetailModal({ issueId, isOpen, onClose, onStatusChanged, onViewUse
                                 borderRadius: '3px',
                                 fontSize: '0.7rem',
                                 fontWeight: 700,
-                                backgroundColor: getStatusBadgeStyle(b.status_code).bg,
-                                color: getStatusBadgeStyle(b.status_code).color,
+                                backgroundColor: getStatusBadgeStyle(b.status_code, b.error_type).bg,
+                                color: getStatusBadgeStyle(b.status_code, b.error_type).color,
                               }}
                             >
-                              {b.status_code || 200}
+                              {getStatusBadgeStyle(b.status_code, b.error_type).label}
                             </span>
                             {b.duration_ms !== undefined && (
                               <span style={{ color: 'var(--text-dim)', fontSize: '0.72rem', fontFamily: 'var(--font-mono)' }}>
@@ -1037,11 +1057,11 @@ function IssueDetailModal({ issueId, isOpen, onClose, onStatusChanged, onViewUse
                                 borderRadius: '4px',
                                 fontSize: '0.72rem',
                                 fontWeight: 700,
-                                backgroundColor: getStatusBadgeStyle(bc.status_code).bg,
-                                color: getStatusBadgeStyle(bc.status_code).color,
+                                backgroundColor: getStatusBadgeStyle(bc.status_code, bc.error_type).bg,
+                                color: getStatusBadgeStyle(bc.status_code, bc.error_type).color,
                               }}
                             >
-                              {bc.status_code || 200}
+                              {getStatusBadgeStyle(bc.status_code, bc.error_type).label}
                             </span>
 
                             {bc.duration_ms !== undefined && (
@@ -1228,18 +1248,18 @@ function IssueDetailModal({ issueId, isOpen, onClose, onStatusChanged, onViewUse
                                   {ev.method.toUpperCase()}
                                 </span>
                               )}
-                              {ev.status_code && (
+                              {(ev.status_code !== null && ev.status_code !== undefined || ev.error_type) && (
                                 <span
                                   style={{
                                     padding: '0.12rem 0.45rem',
                                     borderRadius: '3px',
                                     fontSize: '0.68rem',
                                     fontWeight: 700,
-                                    backgroundColor: getStatusBadgeStyle(ev.status_code).bg,
-                                    color: getStatusBadgeStyle(ev.status_code).color,
+                                    backgroundColor: getStatusBadgeStyle(ev.status_code, ev.error_type).bg,
+                                    color: getStatusBadgeStyle(ev.status_code, ev.error_type).color,
                                   }}
                                 >
-                                  {ev.status_code}
+                                  {getStatusBadgeStyle(ev.status_code, ev.error_type).label}
                                 </span>
                               )}
                               <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>

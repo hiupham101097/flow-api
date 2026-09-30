@@ -79,7 +79,13 @@ export const formatJsonPretty = (data) => {
   return String(parsed);
 };
 
-export const getStatusMeta = (statusCode) => {
+export const getStatusMeta = (statusCode, errorType = null) => {
+  if (errorType === 'timeout') {
+    return { type: 'timeout', badgeClass: 'status-500', pillClass: 'pill-danger', label: 'TIMEOUT' };
+  }
+  if (errorType === 'network_error') {
+    return { type: 'network', badgeClass: 'status-500', pillClass: 'pill-danger', label: 'NETWORK' };
+  }
   const code = Number(statusCode);
   if (code >= 200 && code < 300) {
     return { type: '200', badgeClass: 'status-200', pillClass: 'pill-success', label: 'OK' };
@@ -91,7 +97,7 @@ export const getStatusMeta = (statusCode) => {
 };
 
 export const getSummarySnippet = (log) => {
-  const meta = getStatusMeta(log.status_code);
+  const meta = getStatusMeta(log.status_code, log.error_type);
   if (meta.type === '200') {
     if (!log.response_payload) return '📦 Trả về 200 OK (Không có payload)';
     const payloadStr = typeof log.response_payload === 'string'
@@ -113,6 +119,12 @@ export const getSummarySnippet = (log) => {
   }
   if (meta.type === '400') {
     return `⚠️ 4xx: ${log.error_message || 'Yêu cầu không hợp lệ'}`;
+  }
+  if (meta.type === 'timeout') {
+    return `⏱ Timeout: ${log.error_message || 'API vượt quá thời gian chờ'}`;
+  }
+  if (meta.type === 'network') {
+    return `🌐 Mất kết nối: ${log.error_message || 'Không nhận được phản hồi từ máy chủ'}`;
   }
   return `🚨 5xx: ${log.error_message || 'Lỗi hệ thống máy chủ'}`;
 };

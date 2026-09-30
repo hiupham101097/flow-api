@@ -2,6 +2,7 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, Accept, X-Requested-With',
+  'Access-Control-Expose-Headers': 'x-request-id',
 };
 
 // ==========================================
@@ -654,6 +655,24 @@ async function computeFunnelStats(db, funnel, options = {}) {
 }
 
 let tablesInitialized = false;
+let apiLogDiagnosticsInitialized = false;
+
+async function ensureApiLogDiagnosticColumns(db) {
+  if (apiLogDiagnosticsInitialized) return;
+  for (const column of [
+    'error_type TEXT',
+    'error_code TEXT',
+    'stack_trace TEXT',
+    'request_id TEXT',
+    'server_request_id TEXT',
+  ]) {
+    try {
+      await db.prepare(`ALTER TABLE api_logs ADD COLUMN ${column}`).run();
+    } catch (_) {}
+  }
+  apiLogDiagnosticsInitialized = true;
+}
+
 async function ensureSchema(db) {
   if (tablesInitialized) return;
   try {
@@ -709,11 +728,17 @@ async function ensureSchema(db) {
       'device_name TEXT',
       'user_name TEXT',
       'ip_address TEXT',
+      'error_type TEXT',
+      'error_code TEXT',
+      'stack_trace TEXT',
+      'request_id TEXT',
+      'server_request_id TEXT',
     ]) {
       try {
         await db.prepare(`ALTER TABLE api_logs ADD COLUMN ${column}`).run();
       } catch (_) {}
     }
+    apiLogDiagnosticsInitialized = true;
 
     // 5. Tạo bảng app_crashes nếu chưa có
     await db.prepare(`
@@ -1289,6 +1314,27 @@ const jsonResponse = (data, status = 200) => {
   return new Response(JSON.stringify(data), { status, headers });
 };
 
+const logWorkerException = (error, context = {}) => {
+  console.error({
+    event: 'flow_api_exception',
+    request_id: context.requestId || null,
+    method: context.method || null,
+    path: context.path || null,
+    error_name: error?.name || 'Error',
+    error_message: error?.message || String(error || 'Unknown error'),
+    stack_trace: error?.stack || null,
+  });
+};
+
+const internalErrorResponse = (error, context = {}, extra = {}) => {
+  logWorkerException(error, context);
+  return jsonResponse({
+    error: 'Internal server error',
+    request_id: context.requestId || null,
+    ...extra,
+  }, 500);
+};
+
 // D1 free tier hết hạn mức đọc thì trả lỗi chứ không phải trả rỗng. Nhận diện để
 // dashboard hiện cảnh báo rõ ràng thay vì "không có dữ liệu".
 const isD1QuotaExceeded = (err) => {
@@ -1304,7 +1350,7 @@ const QUOTA_MESSAGE =
   'Tài khoản Cloudflare D1 Free Tier đã dùng hết hạn mức đọc trong ngày (reset lúc 00:00 UTC / 07:00 sáng giờ VN).';
 
 // Dùng ở khối catch của các endpoint đọc: phân biệt hết hạn mức với lỗi thật.
-const readErrorResponse = (err, extra = {}, db = null) => {
+const readErrorResponse = (err, extra = {}, db = null, context = {}) => {
   if (isD1QuotaExceeded(err)) {
     return jsonResponse({ quota_exceeded: true, error: QUOTA_MESSAGE, ...extra }, 200);
   }
@@ -1314,7 +1360,21 @@ const readErrorResponse = (err, extra = {}, db = null) => {
     tablesInitialized = false;
     ensureSchema(db).catch(() => {});
   }
-  return jsonResponse({ error: err.message, ...extra }, 500);
+  return internalErrorResponse(err, context, extra);
+};
+
+const normalizeApiErrorType = (errorType, statusCode, errorMessage = '') => {
+  const validTypes = new Set(['timeout', 'network_error', 'http_error', 'server_error', 'client_error']);
+  const suppliedType = String(errorType || '').trim().toLowerCase();
+  if (Number(statusCode) === 408 || Number(statusCode) === 504) return 'timeout';
+  if (validTypes.has(suppliedType)) return suppliedType;
+
+  const message = String(errorMessage || '').toLowerCase();
+  if (/timeout|timed out|deadline exceeded|time limit/.test(message)) return 'timeout';
+  if (Number(statusCode) === 0) return 'network_error';
+  if (Number(statusCode) >= 500) return 'server_error';
+  if (Number(statusCode) >= 400) return 'http_error';
+  return null;
 };
 
 const formatPayload = (val) => {
@@ -1621,14 +1681,14 @@ const buildScopeClause = (dims, { userId, jobId, appIdentifier, platform }, colu
 const readLimit = (url, fallback = 100, max = 300) =>
   Math.min(Math.max(Number(url.searchParams.get('limit')) || fallback, 1), max);
 
-export default {
-  async fetch(request, env) {
+async function handleRequest(request, env, requestContext) {
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders });
     }
 
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, '').replace(/^\/+/, '/');
+    requestContext.path = path;
 
     // Chỉ kiểm tra schema khi GHI. Chạy trên cả lượt đọc nghĩa là mỗi request
     // kéo theo hàng chục câu DDL, vừa chậm vừa tốn hạn mức.
@@ -1752,7 +1812,7 @@ export default {
         };
         return jsonResponse(value, 200);
       } catch (e) {
-        return readErrorResponse(e, { apps: [], devices: [], users: [] }, env.DB);
+        return readErrorResponse(e, { apps: [], devices: [], users: [] }, env.DB, requestContext);
       }
     }
 
@@ -1772,7 +1832,7 @@ export default {
         `).all();
         return jsonResponse(results);
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
 
@@ -1811,7 +1871,7 @@ export default {
         invalidateDimensions();
         return jsonResponse({ success: true, user_id: userId });
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
 
@@ -1825,7 +1885,7 @@ export default {
         invalidateDimensions();
         return jsonResponse({ success: true });
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
 
@@ -1862,7 +1922,7 @@ export default {
         const { results } = params.length > 0 ? await stmt.bind(...params).all() : await stmt.all();
         return jsonResponse(results);
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
 
@@ -1909,7 +1969,7 @@ export default {
         invalidateDimensions();
         return jsonResponse({ success: true });
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
 
@@ -1921,7 +1981,7 @@ export default {
         invalidateDimensions();
         return jsonResponse({ success: true });
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
 
@@ -1930,6 +1990,7 @@ export default {
     // ==========================================
     if (path === '/logs' && request.method === 'GET') {
       try {
+        await ensureApiLogDiagnosticColumns(env.DB);
         const dims = await loadDimensions(env.DB);
         const limit = readLimit(url);
         const afterId = Number(url.searchParams.get('after_id')) || 0;
@@ -1943,7 +2004,8 @@ export default {
         let query = `
           SELECT
             id, job_id, app_identifier, endpoint, method, status_code,
-            error_message, duration_ms, ip_address, user_name, created_at,
+            error_message, error_type, error_code, request_id, server_request_id, duration_ms,
+            ip_address, user_name, created_at,
             COALESCE(device_name, 'Thiết bị di động') AS device_name,
             substr(response_payload, 1, 300) AS response_payload
           FROM api_logs
@@ -1989,7 +2051,7 @@ export default {
         const { results } = await env.DB.prepare(query).bind(...params).all();
         return jsonResponse(decorateRows(results, dims));
       } catch (e) {
-        return readErrorResponse(e, {}, env.DB);
+        return readErrorResponse(e, {}, env.DB, requestContext);
       }
     }
 
@@ -2001,6 +2063,11 @@ export default {
           method,
           status_code,
           error_message,
+          error_type,
+          error_code,
+          stack_trace,
+          request_id,
+          server_request_id,
           request_payload,
           response_payload,
           duration_ms,
@@ -2014,6 +2081,15 @@ export default {
           user_id,
           ip_address,
         } = body;
+
+        const normalizedStatusCode = status_code === undefined || status_code === null
+          ? null
+          : Number(status_code);
+        const normalizedErrorType = normalizeApiErrorType(error_type, normalizedStatusCode, error_message);
+        const normalizedErrorCode = error_code ? String(error_code).slice(0, 120) : null;
+        const normalizedStackTrace = stack_trace ? String(stack_trace).slice(0, 12000) : null;
+        const normalizedRequestId = request_id ? String(request_id).slice(0, 120) : null;
+        const normalizedServerRequestId = server_request_id ? String(server_request_id).slice(0, 200) : null;
 
         const clientIp = (
           request.headers.get('cf-connecting-ip') ||
@@ -2069,9 +2145,18 @@ export default {
         let logIssueId = null;
         let logFingerprint = null;
 
-        if (status_code && Number(status_code) >= 500) {
-          const title = `${(method || 'GET').toUpperCase()} ${endpoint} (${status_code})`;
-          const culprit = error_message ? String(error_message).slice(0, 200) : endpoint;
+        if (
+          normalizedStatusCode >= 500 ||
+          normalizedErrorType === 'timeout' ||
+          normalizedErrorType === 'network_error'
+        ) {
+          const issueReason = normalizedErrorType === 'timeout'
+            ? 'Timeout'
+            : normalizedErrorType === 'network_error'
+              ? 'Network Error'
+              : String(normalizedStatusCode);
+          const title = `${(method || 'GET').toUpperCase()} ${endpoint} (${issueReason})`;
+          const culprit = error_message ? String(error_message).slice(0, 200) : normalizedErrorCode || endpoint;
           logFingerprint = await generateIssueFingerprint('api_error', effectiveAppIdentifier, title, culprit);
           const issue = await upsertIssueRecord(env.DB, {
             fingerprint: logFingerprint,
@@ -2084,8 +2169,13 @@ export default {
             samplePayload: {
               endpoint,
               method: (method || 'GET').toUpperCase(),
-              status_code,
+              status_code: normalizedStatusCode,
               error_message,
+              error_type: normalizedErrorType,
+              error_code: normalizedErrorCode,
+              stack_trace: normalizedStackTrace,
+              request_id: normalizedRequestId,
+              server_request_id: normalizedServerRequestId,
               request_payload,
               response_payload,
               duration_ms: duration_ms || 0,
@@ -2097,15 +2187,17 @@ export default {
           });
           logIssueId = issue?.id || null;
 
-          triggerTelegramAlert(env.DB, 'api_500', {
-            app_identifier: effectiveAppIdentifier,
-            endpoint,
-            method,
-            status_code,
-            error_message,
-            job_id: effectiveJobId,
-            issue_id: logIssueId,
-          }).catch(() => {});
+          if (normalizedStatusCode >= 500) {
+            triggerTelegramAlert(env.DB, 'api_500', {
+              app_identifier: effectiveAppIdentifier,
+              endpoint,
+              method,
+              status_code: normalizedStatusCode,
+              error_message,
+              job_id: effectiveJobId,
+              issue_id: logIssueId,
+            }).catch(() => {});
+          }
         }
 
         try {
@@ -2113,14 +2205,15 @@ export default {
             INSERT INTO api_logs (
               job_id, app_identifier, endpoint, method, status_code, 
               error_message, request_payload, response_payload, duration_ms,
-              device_name, user_name, ip_address, issue_id, fingerprint
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              device_name, user_name, ip_address, issue_id, fingerprint,
+              error_type, error_code, stack_trace, request_id, server_request_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).bind(
             effectiveJobId,
             effectiveAppIdentifier || null,
             endpoint || '',
             method || 'GET',
-            status_code || null,
+            normalizedStatusCode,
             error_message || null,
             formatPayload(request_payload),
             formatPayload(response_payload),
@@ -2129,7 +2222,12 @@ export default {
             clientUserName || null,
             clientIp || null,
             logIssueId,
-            logFingerprint
+            logFingerprint,
+            normalizedErrorType,
+            normalizedErrorCode,
+            normalizedStackTrace,
+            normalizedRequestId,
+            normalizedServerRequestId
           ).run();
         } catch (insertErr) {
           // Fallback nếu cột mới chưa cập nhật
@@ -2137,27 +2235,33 @@ export default {
             INSERT INTO api_logs (
               job_id, app_identifier, endpoint, method, status_code, 
               error_message, request_payload, response_payload, duration_ms,
-              device_name, user_name, ip_address
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              device_name, user_name, ip_address,
+              error_type, error_code, stack_trace, request_id, server_request_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).bind(
             effectiveJobId,
             effectiveAppIdentifier || null,
             endpoint || '',
             method || 'GET',
-            status_code || null,
+            normalizedStatusCode,
             error_message || null,
             formatPayload(request_payload),
             formatPayload(response_payload),
             duration_ms || 0,
             effectiveDeviceName || null,
             clientUserName || null,
-            clientIp || null
+            clientIp || null,
+            normalizedErrorType,
+            normalizedErrorCode,
+            normalizedStackTrace,
+            normalizedRequestId,
+            normalizedServerRequestId
           ).run();
         }
 
         return jsonResponse({ success: true, job_id: effectiveJobId, issue_id: logIssueId });
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
 
@@ -2221,7 +2325,7 @@ export default {
         const { results } = await env.DB.prepare(query).bind(...params).all();
         return jsonResponse(decorateRows(results, dims));
       } catch (e) {
-        return readErrorResponse(e, {}, env.DB);
+        return readErrorResponse(e, {}, env.DB, requestContext);
       }
     }
 
@@ -2374,7 +2478,7 @@ export default {
 
         return jsonResponse({ success: true, id: res.meta?.last_row_id, job_id: effectiveJobId, issue_id: issueId });
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
 
@@ -2456,7 +2560,7 @@ export default {
           }))
         );
       } catch (e) {
-        return readErrorResponse(e, {}, env.DB);
+        return readErrorResponse(e, {}, env.DB, requestContext);
       }
     }
 
@@ -2478,7 +2582,7 @@ export default {
         const dims = await loadDimensions(env.DB);
         return jsonResponse(decorateRows([row], dims)[0]);
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
 
@@ -2569,7 +2673,7 @@ export default {
 
         return jsonResponse({ success: true, id: res.meta?.last_row_id, job_id: effectiveJobId });
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
     // ==========================================
@@ -2588,7 +2692,7 @@ export default {
         const { results } = await env.DB.prepare(query).all();
         return jsonResponse((results || []).map(mapFunnelRow));
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
 
@@ -2654,7 +2758,7 @@ export default {
         const saved = await loadFunnel(env.DB, funnelKey);
         return jsonResponse({ success: true, funnel: saved });
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
 
@@ -2672,7 +2776,7 @@ export default {
           .run();
         return jsonResponse({ success: true });
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
 
@@ -2700,7 +2804,7 @@ export default {
 
         return jsonResponse({ events, suggestions });
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
 
@@ -2778,7 +2882,7 @@ export default {
 
         return jsonResponse(stats, 200);
       } catch (e) {
-        return readErrorResponse(e, {}, env.DB);
+        return readErrorResponse(e, {}, env.DB, requestContext);
       }
     }
 
@@ -2787,6 +2891,7 @@ export default {
     // ==========================================
     if (path === '/telemetry/health' && request.method === 'GET') {
       try {
+        await ensureApiLogDiagnosticColumns(env.DB);
         const platform = (url.searchParams.get('platform') || '').trim().toLowerCase();
         const appIdentifier = url.searchParams.get('app_identifier') || url.searchParams.get('app_id') || null;
         let appFilterLogs = '';
@@ -2818,7 +2923,7 @@ export default {
             SELECT 
               COUNT(*) AS total,
               SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN 1 ELSE 0 END) AS success_count,
-              SUM(CASE WHEN status_code >= 500 OR status_code < 200 THEN 1 ELSE 0 END) AS server_errors,
+              SUM(CASE WHEN status_code >= 500 AND (error_type IS NULL OR error_type <> 'timeout') THEN 1 ELSE 0 END) AS server_errors,
               ROUND(AVG(CASE WHEN duration_ms > 0 THEN duration_ms ELSE NULL END), 0) AS avg_duration
             FROM api_logs
             WHERE created_at >= datetime('now', '-24 hours')${appFilterLogs}
@@ -2852,7 +2957,7 @@ export default {
           total_events: eventStats?.total || 0,
         }, 200);
       } catch (e) {
-        return readErrorResponse(e, {}, env.DB);
+        return readErrorResponse(e, {}, env.DB, requestContext);
       }
     }
 
@@ -2861,6 +2966,7 @@ export default {
     // ==========================================
     if (path === '/telemetry/timeline' && request.method === 'GET') {
       try {
+        await ensureApiLogDiagnosticColumns(env.DB);
         const userParam = url.searchParams.get('user') || url.searchParams.get('user_name') || url.searchParams.get('user_id');
         const deviceParam = url.searchParams.get('device') || url.searchParams.get('device_name');
         const appIdentifier = url.searchParams.get('app_identifier') || url.searchParams.get('app_id');
@@ -2909,7 +3015,7 @@ export default {
             ORDER BY id DESC LIMIT ?
           `).bind(...eventParams, limit).all(),
           env.DB.prepare(`
-            SELECT id, app_identifier, endpoint, method, status_code, error_message, duration_ms, user_name, device_name, substr(response_payload, 1, 300) as response_payload, created_at
+            SELECT id, app_identifier, endpoint, method, status_code, error_message, error_type, error_code, request_id, duration_ms, user_name, device_name, substr(response_payload, 1, 300) as response_payload, created_at
             FROM api_logs ${logWhere}
             ORDER BY id DESC LIMIT ?
           `).bind(...logParams, limit).all(),
@@ -2939,14 +3045,14 @@ export default {
         });
 
         (logsRes.results || []).forEach((l) => {
-          const isError = l.status_code >= 500 || l.status_code < 200;
+          const isError = l.status_code >= 500 || l.error_type === 'timeout' || l.error_type === 'network_error';
           const isWarn = l.status_code >= 400 && l.status_code < 500;
           rawTimeline.push({
             id: `log-${l.id}`,
             raw_id: l.id,
             category: isError ? 'api_error' : isWarn ? 'api_warning' : 'api_success',
             title: `${l.method} ${l.endpoint}`,
-            subtitle: `HTTP ${l.status_code} • ${l.duration_ms || 0}ms`,
+            subtitle: `${l.error_type === 'timeout' ? 'TIMEOUT' : l.error_type === 'network_error' ? 'NETWORK' : `HTTP ${l.status_code}`} • ${l.duration_ms || 0}ms`,
             created_at: l.created_at,
             user_name: l.user_name,
             device_name: l.device_name,
@@ -2954,6 +3060,9 @@ export default {
             status_code: l.status_code,
             duration_ms: l.duration_ms,
             error_message: l.error_message,
+            error_type: l.error_type,
+            error_code: l.error_code,
+            request_id: l.request_id,
             response_payload: l.response_payload,
           });
         });
@@ -3000,7 +3109,7 @@ export default {
           device: deviceParam || null,
         });
       } catch (e) {
-        return readErrorResponse(e, { items: [] }, env.DB);
+        return readErrorResponse(e, { items: [] }, env.DB, requestContext);
       }
     }
 
@@ -3025,7 +3134,7 @@ export default {
           updated_at: settings.updated_at || null,
         });
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
 
@@ -3056,7 +3165,7 @@ export default {
         invalidateSettingsCache();
         return jsonResponse({ success: true, message: 'Đã lưu cấu hình Telegram thành công' });
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
 
@@ -3089,7 +3198,7 @@ export default {
           return jsonResponse({ error: 'Không thể gửi tin nhắn qua Telegram. Vui lòng kiểm tra lại Bot Token và Chat ID (đảm bảo bạn đã nhấn /start trong bot).' }, 400);
         }
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
 
@@ -3133,12 +3242,23 @@ export default {
           const lApp = (log.app_identifier || log.app_id || effectiveApp).trim();
           const lDevice = (log.device_name || device_name || '').trim();
           const lUser = (log.user_name || user_name || '').trim();
+          const lStatusCode = log.status_code === undefined || log.status_code === null
+            ? null
+            : Number(log.status_code);
+          const lErrorType = normalizeApiErrorType(log.error_type, lStatusCode, log.error_message);
+          const lErrorCode = log.error_code ? String(log.error_code).slice(0, 120) : null;
+          const lStackTrace = log.stack_trace ? String(log.stack_trace).slice(0, 12000) : null;
+          const lRequestId = log.request_id ? String(log.request_id).slice(0, 120) : null;
+          const lServerRequestId = log.server_request_id ? String(log.server_request_id).slice(0, 200) : null;
 
           let lIssueId = null;
           let lFingerprint = null;
-          if (log.status_code && Number(log.status_code) >= 500) {
-            const lTitle = `${(log.method || 'GET').toUpperCase()} ${log.endpoint} (${log.status_code})`;
-            const lCulprit = log.error_message ? String(log.error_message).slice(0, 200) : log.endpoint;
+          if (lStatusCode >= 500 || lErrorType === 'timeout' || lErrorType === 'network_error') {
+            const issueReason = lErrorType === 'timeout'
+              ? 'Timeout'
+              : lErrorType === 'network_error' ? 'Network Error' : String(lStatusCode);
+            const lTitle = `${(log.method || 'GET').toUpperCase()} ${log.endpoint} (${issueReason})`;
+            const lCulprit = log.error_message ? String(log.error_message).slice(0, 200) : lErrorCode || log.endpoint;
             lFingerprint = await generateIssueFingerprint('api_error', lApp, lTitle, lCulprit);
             const lIssue = await upsertIssueRecord(env.DB, {
               fingerprint: lFingerprint,
@@ -3151,8 +3271,13 @@ export default {
               samplePayload: {
                 endpoint: log.endpoint,
                 method: (log.method || 'GET').toUpperCase(),
-                status_code: log.status_code,
+                status_code: lStatusCode,
                 error_message: log.error_message,
+                error_type: lErrorType,
+                error_code: lErrorCode,
+                stack_trace: lStackTrace,
+                request_id: lRequestId,
+                server_request_id: lServerRequestId,
                 request_payload: log.request_payload,
                 response_payload: log.response_payload,
                 duration_ms: log.duration_ms || 0,
@@ -3164,13 +3289,13 @@ export default {
             });
             lIssueId = lIssue?.id || null;
 
-            if (!batchApi500AlertTriggered) {
+            if (lStatusCode >= 500 && !batchApi500AlertTriggered) {
               batchApi500AlertTriggered = true;
               triggerTelegramAlert(env.DB, 'api_500', {
                 app_identifier: lApp,
                 endpoint: log.endpoint,
                 method: log.method,
-                status_code: log.status_code,
+                status_code: lStatusCode,
                 error_message: log.error_message,
                 job_id: effectiveJobId,
                 issue_id: lIssueId,
@@ -3181,16 +3306,17 @@ export default {
           statements.push(
             env.DB.prepare(`
               INSERT INTO api_logs (
-                job_id, app_identifier, endpoint, method, status_code, 
-                error_message, request_payload, response_payload, duration_ms,
-                device_name, user_name, ip_address, issue_id, fingerprint
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              job_id, app_identifier, endpoint, method, status_code, 
+              error_message, request_payload, response_payload, duration_ms,
+              device_name, user_name, ip_address, issue_id, fingerprint,
+              error_type, error_code, stack_trace, request_id, server_request_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).bind(
               effectiveJobId,
               lApp || null,
               log.endpoint || '',
               (log.method || 'GET').toUpperCase(),
-              log.status_code || null,
+              lStatusCode,
               log.error_message || null,
               formatPayload(log.request_payload),
               formatPayload(log.response_payload),
@@ -3199,7 +3325,12 @@ export default {
               lUser || null,
               clientIp || null,
               lIssueId,
-              lFingerprint
+              lFingerprint,
+              lErrorType,
+              lErrorCode,
+              lStackTrace,
+              lRequestId,
+              lServerRequestId
             )
           );
         }
@@ -3342,7 +3473,7 @@ export default {
           },
         });
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
 
@@ -3452,7 +3583,7 @@ export default {
           },
         });
       } catch (e) {
-        return readErrorResponse(e, { issues: [] }, env.DB);
+        return readErrorResponse(e, { issues: [] }, env.DB, requestContext);
       }
     }
 
@@ -3506,7 +3637,7 @@ export default {
             } catch (_) {}
 
             let bcQuery = `
-              SELECT id, app_identifier, endpoint, method, status_code, duration_ms, error_message, request_payload, response_payload, device_name, user_name, ip_address, created_at
+              SELECT id, app_identifier, endpoint, method, status_code, duration_ms, error_message, error_type, error_code, stack_trace, request_id, server_request_id, request_payload, response_payload, device_name, user_name, ip_address, created_at
               FROM api_logs
               WHERE app_identifier = ?
             `;
@@ -3535,7 +3666,7 @@ export default {
         } else {
           // api_error
           const { results } = await env.DB.prepare(`
-            SELECT id, app_identifier, endpoint, method, status_code, error_message, request_payload, response_payload, duration_ms, device_name, user_name, ip_address, created_at
+            SELECT id, app_identifier, endpoint, method, status_code, error_message, error_type, error_code, stack_trace, request_id, server_request_id, request_payload, response_payload, duration_ms, device_name, user_name, ip_address, created_at
             FROM api_logs
             WHERE issue_id = ? OR fingerprint = ?
             ORDER BY id DESC LIMIT 20
@@ -3546,7 +3677,7 @@ export default {
           const latestApiErr = recentEvents[0];
           if (latestApiErr) {
             let bcQuery = `
-              SELECT id, app_identifier, endpoint, method, status_code, duration_ms, error_message, request_payload, response_payload, device_name, user_name, ip_address, created_at
+              SELECT id, app_identifier, endpoint, method, status_code, duration_ms, error_message, error_type, error_code, stack_trace, request_id, server_request_id, request_payload, response_payload, device_name, user_name, ip_address, created_at
               FROM api_logs
               WHERE app_identifier = ?
             `;
@@ -3578,7 +3709,7 @@ export default {
         if (breadcrumbs.length === 0 && issue.app_identifier) {
           try {
             const { results: fallbackBc } = await env.DB.prepare(`
-              SELECT id, app_identifier, endpoint, method, status_code, duration_ms, error_message, request_payload, response_payload, device_name, user_name, ip_address, created_at
+              SELECT id, app_identifier, endpoint, method, status_code, duration_ms, error_message, error_type, error_code, stack_trace, request_id, server_request_id, request_payload, response_payload, device_name, user_name, ip_address, created_at
               FROM api_logs
               WHERE app_identifier = ?
               ORDER BY created_at DESC, id DESC
@@ -3592,9 +3723,13 @@ export default {
         const failedRequest = {
           endpoint: latestEvent?.endpoint || parsedSample?.endpoint || issue.culprit || '',
           method: latestEvent?.method || parsedSample?.method || 'POST',
-          status_code: latestEvent?.status_code || parsedSample?.status_code || 500,
+          status_code: latestEvent?.status_code ?? parsedSample?.status_code ?? 500,
           duration_ms: latestEvent?.duration_ms ?? parsedSample?.duration_ms ?? null,
           error_message: latestEvent?.error_message || parsedSample?.error_message || issue.title || '',
+          error_type: latestEvent?.error_type || parsedSample?.error_type || null,
+          error_code: latestEvent?.error_code || parsedSample?.error_code || null,
+          request_id: latestEvent?.request_id || parsedSample?.request_id || null,
+          server_request_id: latestEvent?.server_request_id || parsedSample?.server_request_id || null,
           request_payload: latestEvent?.request_payload || parsedSample?.request_payload || null,
           response_payload: latestEvent?.response_payload || parsedSample?.response_payload || null,
           device_name: latestEvent?.device_name || parsedSample?.device_name || (latestEvent?.device_info ? (typeof latestEvent.device_info === 'string' ? latestEvent.device_info : JSON.stringify(latestEvent.device_info)) : null),
@@ -3614,7 +3749,7 @@ export default {
           breadcrumbs: breadcrumbs,
         });
       } catch (e) {
-        return readErrorResponse(e, {}, env.DB);
+        return readErrorResponse(e, {}, env.DB, requestContext);
       }
     }
 
@@ -3637,7 +3772,7 @@ export default {
         const updated = await env.DB.prepare('SELECT * FROM issues WHERE id = ?').bind(issueId).first();
         return jsonResponse({ success: true, issue: updated });
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
 
@@ -3654,13 +3789,63 @@ export default {
 
         return jsonResponse({ success: true, message: 'Đã giải quyết Issue thành công' });
       } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+        return internalErrorResponse(e, requestContext);
       }
     }
 
     // Serve the Vite build for the website and let Cloudflare's SPA fallback
     // return index.html for client-side routes such as /admin/dashboard or /admin/users.
     return env.ASSETS.fetch(request);
+}
+
+export default {
+  async fetch(request, env, ctx) {
+    const startedAt = Date.now();
+    const requestId = String(
+      request.headers.get('cf-ray') || request.headers.get('x-request-id') || crypto.randomUUID()
+    ).slice(0, 120);
+    const requestContext = { requestId, method: request.method, path: new URL(request.url).pathname };
+
+    try {
+      const response = await handleRequest(request, env, requestContext);
+      const durationMs = Date.now() - startedAt;
+      const headers = new Headers(response.headers);
+      headers.set('x-request-id', requestId);
+      headers.set('Access-Control-Expose-Headers', 'x-request-id');
+
+      if (response.status >= 500) {
+        console.error({
+          event: 'flow_api_http_error',
+          request_id: requestId,
+          method: request.method,
+          path: requestContext.path,
+          status_code: response.status,
+          duration_ms: durationMs,
+        });
+      }
+      if (durationMs >= 5000) {
+        console.warn({
+          event: 'flow_api_slow_request',
+          request_id: requestId,
+          method: request.method,
+          path: requestContext.path,
+          status_code: response.status,
+          duration_ms: durationMs,
+          slow_threshold_ms: 5000,
+        });
+      }
+
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
+    } catch (error) {
+      logWorkerException(error, requestContext);
+      const response = jsonResponse({ error: 'Internal server error', request_id: requestId }, 500);
+      response.headers.set('x-request-id', requestId);
+      return response;
+    }
   },
 
   async scheduled(event, env, ctx) {

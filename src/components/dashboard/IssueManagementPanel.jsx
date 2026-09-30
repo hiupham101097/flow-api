@@ -392,7 +392,7 @@ function IssueManagementPanel({ selectedApp = '', activeUserJob = null, onViewUs
               const parsed = issue.parsed_sample || {};
               const method = (parsed.method || (issue.title?.match(/^(GET|POST|PUT|DELETE|PATCH)\b/i)?.[1]) || (issue.type === 'crash' ? null : 'GET'))?.toUpperCase();
               const endpoint = parsed.endpoint || (issue.title?.match(/^(?:GET|POST|PUT|DELETE|PATCH)\s+([^\s(]+)/i)?.[1]) || (issue.culprit?.startsWith('/') ? issue.culprit : '');
-              const statusCode = parsed.status_code || (issue.title?.match(/\((\d{3})\)/)?.[1]) || (issue.type === 'crash' ? null : 500);
+              const statusCode = parsed.status_code ?? (issue.title?.match(/\((\d{3})\)/)?.[1]) ?? (issue.type === 'crash' ? null : 500);
               const errorMsg = parsed.error_message || (issue.culprit && issue.culprit !== endpoint ? issue.culprit : (issue.type === 'crash' ? issue.title : ''));
               const clientUser = parsed.user_name;
               const clientDevice = parsed.device_name;
@@ -468,7 +468,13 @@ function IssueManagementPanel({ selectedApp = '', activeUserJob = null, onViewUs
                             color: 'var(--text)',
                           }}
                         >
-                          {issue.type === 'crash' ? '📱 Crash' : '⚠️ API 500'}
+                          {issue.type === 'crash'
+                            ? '📱 Crash'
+                            : parsed.error_type === 'timeout'
+                              ? '⏱ API Timeout'
+                              : parsed.error_type === 'network_error'
+                                ? '🌐 Network Error'
+                                : '⚠️ API 5xx'}
                         </span>
 
                         {/* Job Name / App ID badge */}

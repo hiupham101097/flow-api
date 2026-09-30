@@ -137,7 +137,7 @@ function Dashboard() {
   const [quotaExceeded, setQuotaExceeded] = useState(false);
 
   // Sub-filter Tabs
-  const [activeTab, setActiveTab] = useState(searchParams.get('status') || 'all'); // for logs: 'all', '200', '400', '500'
+  const [activeTab, setActiveTab] = useState(searchParams.get('status') || 'all'); // for logs: 'all', '200', '400', '500', 'timeout'
   const [crashTab, setCrashTab] = useState(searchParams.get('severity') || 'all');   // for crashes: 'all', 'fatal', 'non-fatal'
   const [eventTab, setEventTab] = useState(searchParams.get('type') || 'all');   // for analytics: 'all', 'custom', 'screen_view'
 
@@ -1007,7 +1007,7 @@ export const appConfig: ApplicationConfig = {
   };
 
   const getSummarySnippet = (log) => {
-    const meta = getStatusMeta(log.status_code);
+    const meta = getStatusMeta(log.status_code, log.error_type);
     if (meta.type === '200') {
       if (!log.response_payload) return '📦 Trả về 200 OK (Không có payload)';
       const payloadStr = typeof log.response_payload === 'string'
@@ -1030,6 +1030,12 @@ export const appConfig: ApplicationConfig = {
     }
     if (meta.type === '400') {
       return `⚠️ 4xx: ${log.error_message || 'Yêu cầu không hợp lệ'}`;
+    }
+    if (meta.type === 'timeout') {
+      return `⏱ Timeout: ${log.error_message || 'API vượt quá thời gian chờ'}`;
+    }
+    if (meta.type === 'network') {
+      return `🌐 Mất kết nối: ${log.error_message || 'Không nhận được phản hồi từ máy chủ'}`;
     }
     return `🚨 5xx: ${log.error_message || 'Lỗi hệ thống máy chủ'}`;
   };
@@ -1102,8 +1108,13 @@ export const appConfig: ApplicationConfig = {
   // Status counters for Logs
   const totalCalls = scopedLogs.length;
   const count200 = scopedLogs.filter((log) => log.status_code >= 200 && log.status_code < 300).length;
-  const count400 = scopedLogs.filter((log) => log.status_code >= 400 && log.status_code < 500).length;
-  const count500 = scopedLogs.filter((log) => log.status_code >= 500 || log.status_code < 200).length;
+  const count400 = scopedLogs.filter((log) =>
+    Number(log.status_code) >= 400 && Number(log.status_code) < 500 && log.error_type !== 'timeout'
+  ).length;
+  const count500 = scopedLogs.filter((log) => Number(log.status_code) >= 500 && log.error_type !== 'timeout').length;
+  const countTransportErrors = scopedLogs.filter((log) =>
+    log.error_type === 'timeout' || log.error_type === 'network_error'
+  ).length;
   const successRate = totalCalls > 0 ? Math.round((count200 / totalCalls) * 100) : null;
   const totalDuration = scopedLogs.reduce((acc, log) => acc + (Number(log.duration_ms) || 0), 0);
   const avgDuration = totalCalls > 0 ? Math.round(totalDuration / totalCalls) : 0;
@@ -1208,8 +1219,9 @@ export const appConfig: ApplicationConfig = {
       const matchesTab = (() => {
         if (activeTab === 'all') return true;
         if (activeTab === '200') return log.status_code >= 200 && log.status_code < 300;
-        if (activeTab === '400') return log.status_code >= 400 && log.status_code < 500;
-        if (activeTab === '500') return log.status_code >= 500 || log.status_code < 200;
+        if (activeTab === '400') return log.status_code >= 400 && log.status_code < 500 && log.error_type !== 'timeout';
+        if (activeTab === '500') return log.status_code >= 500 && log.error_type !== 'timeout';
+        if (activeTab === 'timeout') return log.error_type === 'timeout' || log.error_type === 'network_error';
         return true;
       })();
 
@@ -1222,13 +1234,16 @@ export const appConfig: ApplicationConfig = {
       const endpointMatch = toSearchText(log.endpoint).includes(lowerSearch);
       const statusMatch = toSearchText(log.status_code).includes(lowerSearch);
       const errorMatch = toSearchText(log.error_message).includes(lowerSearch);
+      const errorTypeMatch = toSearchText(log.error_type).includes(lowerSearch);
+      const errorCodeMatch = toSearchText(log.error_code).includes(lowerSearch);
+      const requestIdMatch = toSearchText(log.request_id || log.server_request_id).includes(lowerSearch);
       const appMatch = toSearchText(log.app_identifier).includes(lowerSearch);
       const userMatch = toSearchText(log.user_name).includes(lowerSearch);
       const deviceMatch = toSearchText(log.device_name).includes(lowerSearch);
       const ipMatch = toSearchText(log.ip_address).includes(lowerSearch);
       const jobMatch = toSearchText(log.job_name).includes(lowerSearch);
 
-      return endpointMatch || statusMatch || errorMatch || appMatch || userMatch || jobMatch || deviceMatch || ipMatch;
+      return endpointMatch || statusMatch || errorMatch || errorTypeMatch || errorCodeMatch || requestIdMatch || appMatch || userMatch || jobMatch || deviceMatch || ipMatch;
     });
   }, [scopedLogs, activeTab, debouncedSearch, deviceFilter, userFilter]);
 
@@ -1433,6 +1448,11 @@ export const appConfig: ApplicationConfig = {
             <span>5xx Lỗi Server</span>
             <strong className={count500 ? 'metric-error' : ''}>{count500}</strong>
             <small>{count500 ? 'Ngoại lệ máy chủ' : 'Hệ thống ổn định'}</small>
+          </button>
+          <button type="button" className="metric-item metric-action" onClick={() => { setActiveTab('timeout'); setMonitorQuery({ status: 'timeout' }); }} aria-label={`Lọc ${countTransportErrors} lỗi timeout hoặc mạng`}>
+            <span>Timeout / Mạng</span>
+            <strong className={countTransportErrors ? 'metric-error' : ''}>{countTransportErrors}</strong>
+            <small>{countTransportErrors ? 'Không nhận được phản hồi' : 'Không có lỗi kết nối'}</small>
           </button>
           <div className="metric-item">
             <span>Độ trễ trung bình</span>
@@ -1853,6 +1873,7 @@ export const appConfig: ApplicationConfig = {
             count200={count200}
             count400={count400}
             count500={count500}
+            countTransportErrors={countTransportErrors}
             activeTab={activeTab}
             setActiveTab={setActiveTab}
             setMonitorQuery={setMonitorQuery}
@@ -2055,7 +2076,27 @@ export const appConfig: ApplicationConfig = {
 
               {/* Status Alert Banner */}
               {(() => {
-                const meta = getStatusMeta(selectedLog.status_code);
+                const meta = getStatusMeta(selectedLog.status_code, selectedLog.error_type);
+                if (meta.type === 'timeout') {
+                  return (
+                    <div className="modal-status-banner banner-danger">
+                      <div>
+                        <strong>⏱ API Timeout — Không nhận được phản hồi đúng hạn</strong>
+                        <span>{selectedLog.error_message || 'Request hết thời gian chờ ở client.'}</span>
+                      </div>
+                    </div>
+                  );
+                }
+                if (meta.type === 'network') {
+                  return (
+                    <div className="modal-status-banner banner-danger">
+                      <div>
+                        <strong>🌐 Lỗi kết nối — Không nhận được HTTP response</strong>
+                        <span>{selectedLog.error_message || 'Kiểm tra kết nối mạng hoặc trạng thái máy chủ.'}</span>
+                      </div>
+                    </div>
+                  );
+                }
                 if (meta.type === '200') {
                   return (
                     <div className="modal-status-banner banner-success">
@@ -2102,7 +2143,7 @@ export const appConfig: ApplicationConfig = {
                 </div>
                 <div>
                   <span className="meta-label">Trạng thái HTTP</span>
-                  <strong className="meta-value">{selectedLog.status_code || 'Không có'}</strong>
+                  <strong className="meta-value">{selectedLog.status_code ?? 'Không có'}</strong>
                 </div>
                 <div>
                   <span className="meta-label">Độ trễ phản hồi</span>
@@ -2120,6 +2161,26 @@ export const appConfig: ApplicationConfig = {
                   <span className="meta-label">Thời điểm ghi nhận</span>
                   <strong className="meta-value">{formatVietnamDateTime(selectedLog.created_at)}</strong>
                 </div>
+                {selectedLog.error_type && (
+                  <div>
+                    <span className="meta-label">Phân loại lỗi</span>
+                    <strong className="meta-value">{selectedLog.error_type}</strong>
+                  </div>
+                )}
+                {selectedLog.error_code && (
+                  <div>
+                    <span className="meta-label">Mã lỗi</span>
+                    <strong className="meta-value">{selectedLog.error_code}</strong>
+                  </div>
+                )}
+                {(selectedLog.request_id || selectedLog.server_request_id) && (
+                  <div>
+                    <span className="meta-label">Request ID</span>
+                    <strong className="meta-value" style={{ fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>
+                      {selectedLog.server_request_id || selectedLog.request_id}
+                    </strong>
+                  </div>
+                )}
               </div>
 
               {/* Response Payload */}
@@ -2159,6 +2220,22 @@ export const appConfig: ApplicationConfig = {
                   <div className="log-code error-highlight">
                     {selectedLog.error_message}
                   </div>
+                </section>
+              )}
+
+              {selectedLog.stack_trace && (
+                <section className="log-section">
+                  <div className="section-head">
+                    <h3 className="text-danger">🧵 Stack trace</h3>
+                    <button
+                      type="button"
+                      className="btn-mini"
+                      onClick={() => copyToClipboard(selectedLog.stack_trace, 'stack')}
+                    >
+                      {copiedItem === 'stack' ? '✓ Đã sao chép' : 'Sao chép'}
+                    </button>
+                  </div>
+                  <pre className="log-code error-highlight">{selectedLog.stack_trace}</pre>
                 </section>
               )}
 

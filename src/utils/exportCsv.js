@@ -22,6 +22,9 @@ export function exportToCsv(type, data) {
       'Method',
       'Endpoint',
       'Trạng thái HTTP',
+      'Loại lỗi',
+      'Mã lỗi',
+      'Request ID',
       'Thời gian xử lý (ms)',
       'Chi tiết lỗi / Tóm tắt',
     ];
@@ -35,6 +38,9 @@ export function exportToCsv(type, data) {
       l.method,
       l.endpoint,
       l.status_code,
+      l.error_type || '',
+      l.error_code || '',
+      l.server_request_id || l.request_id || '',
       l.duration_ms || 0,
       (l.error_message || l.response_payload || '').replace(/"/g, '""'),
     ]);

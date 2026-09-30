@@ -7,6 +7,12 @@
 > - **Tên trình duyệt & OS (`device_name`)**: Tự động nhận diện (ví dụ: `Chrome 128 (Windows 11)`, `Safari 17 (macOS)`...).
 > - **IP máy (`ip_address`)**: Server Cloudflare tự động định danh (Angular không cần lấy IP).
 
+## Theo dõi Timeout và nguyên nhân lỗi
+
+SDK mới phân loại `timeout`, `network_error`, lỗi HTTP, gửi mã lỗi, stack trace và request ID. Trong Dashboard, mở tab **Timeout / Mạng** để lọc nhanh; mở một dòng lỗi để xem nguyên nhân và stack trace. Nếu ứng dụng đã tích hợp logger cũ, cập nhật hai interceptor ở dưới hoặc chép phiên bản mới từ `public/angular/api-logger.service.ts`, rồi phát hành lại ứng dụng. Các log cũ không thể tự phân biệt chính xác timeout với mất mạng.
+
+Với lỗi 500 phát sinh bên trong Worker `flow-api`, mở **Cloudflare Dashboard → Workers & Pages → flow-api → Observability**. Tìm theo `request_id` trong chi tiết API; log `flow_api_exception` có message và stack trace, còn `flow_api_slow_request` đánh dấu request mất từ 5 giây trở lên. Lỗi runtime như Worker vượt CPU hoặc uncaught exception cũng xuất hiện trong mục Errors/Workers Logs của Cloudflare.
+
 ---
 
 ## 🚀 PROMPT COPY DÀNH CHO BÊN ANGULAR (HOẶC AI DEV)
@@ -34,6 +40,16 @@ import {
 import { Router, NavigationEnd } from '@angular/router';
 import { Observable, throwError } from 'rxjs';
 import { tap, catchError } from 'rxjs/operators';
+
+const createRequestId = (): string => crypto.randomUUID();
+const classifyRequestError = (error: any, statusCode: number): string => {
+  if (statusCode === 408 || statusCode === 504) return 'timeout';
+  if (statusCode >= 500) return 'server_error';
+  if (statusCode >= 400) return 'http_error';
+  const message = `${error?.name || ''} ${error?.error?.name || ''} ${error?.message || ''} ${error?.error?.message || ''}`.toLowerCase();
+  if (/timeout|timed out|deadline exceeded/.test(message)) return 'timeout';
+  return 'network_error';
+};
 
 export interface TelemetryConfig {
   appId: string;
@@ -134,6 +150,11 @@ export class ApiLoggerService {
     requestPayload?: any;
     responsePayload?: any;
     errorMessage?: string;
+    errorType?: string;
+    errorCode?: string;
+    stackTrace?: string;
+    requestId?: string;
+    serverRequestId?: string;
   }): void {
     if (params.endpoint.includes(ApiLoggerService._serverUrl)) {
       return;
@@ -153,6 +174,11 @@ export class ApiLoggerService {
           ? JSON.stringify(params.requestPayload).slice(0, 2000)
           : (params.requestPayload ? String(params.requestPayload).slice(0, 2000) : null),
         error_message: params.errorMessage || null,
+        error_type: params.errorType || null,
+        error_code: params.errorCode || null,
+        stack_trace: params.stackTrace || null,
+        request_id: params.requestId || null,
+        server_request_id: params.serverRequestId || null,
         device_name: ApiLoggerService.deviceName,
         user_name: ApiLoggerService.userName || undefined,
       };
@@ -235,6 +261,7 @@ export const apiLoggerInterceptor: HttpInterceptorFn = (req, next) => {
   }
 
   const startTime = Date.now();
+  const requestId = createRequestId();
 
   return next(req).pipe(
     tap({
@@ -248,30 +275,37 @@ export const apiLoggerInterceptor: HttpInterceptorFn = (req, next) => {
             durationMs: duration,
             requestPayload: req.body,
             responsePayload: event.body,
+            requestId,
+            serverRequestId: event.headers.get('x-request-id') || event.headers.get('cf-ray') || undefined,
           });
         }
       },
     }),
     catchError((error: any) => {
       const duration = Date.now() - startTime;
-      let statusCode = 500;
+      let statusCode = 0;
       let errorMsg = error?.message || 'Unknown Network Error';
 
       if (error instanceof HttpErrorResponse) {
         statusCode = error.status;
         errorMsg = typeof error.error === 'string'
           ? error.error
-          : (error.error?.message || error.message || error.statusText);
+          : (error.error?.message || error.error?.error || error.error?.detail || error.error?.msg || error.message || error.statusText);
       }
 
       ApiLoggerService.sendApiLog({
         endpoint: req.urlWithParams || req.url,
         method: req.method,
-        statusCode: statusCode || 500,
+        statusCode,
         durationMs: duration,
         requestPayload: req.body,
         responsePayload: error?.error,
         errorMessage: errorMsg,
+        errorType: classifyRequestError(error, statusCode),
+        errorCode: error?.code || error?.error?.name || error?.name,
+        stackTrace: error?.stack,
+        requestId,
+        serverRequestId: error?.headers?.get?.('x-request-id') || error?.headers?.get?.('cf-ray'),
       });
 
       return throwError(() => error);
@@ -288,6 +322,7 @@ export class ApiLoggerInterceptor implements HttpInterceptor {
     }
 
     const startTime = Date.now();
+    const requestId = createRequestId();
 
     return next.handle(req).pipe(
       tap({
@@ -301,30 +336,37 @@ export class ApiLoggerInterceptor implements HttpInterceptor {
               durationMs: duration,
               requestPayload: req.body,
               responsePayload: event.body,
+              requestId,
+              serverRequestId: event.headers.get('x-request-id') || event.headers.get('cf-ray') || undefined,
             });
           }
         },
       }),
       catchError((error: any) => {
         const duration = Date.now() - startTime;
-        let statusCode = 500;
+        let statusCode = 0;
         let errorMsg = error?.message || 'Unknown Network Error';
 
         if (error instanceof HttpErrorResponse) {
           statusCode = error.status;
           errorMsg = typeof error.error === 'string'
             ? error.error
-            : (error.error?.message || error.message || error.statusText);
+            : (error.error?.message || error.error?.error || error.error?.detail || error.error?.msg || error.message || error.statusText);
         }
 
         ApiLoggerService.sendApiLog({
           endpoint: req.urlWithParams || req.url,
           method: req.method,
-          statusCode: statusCode || 500,
+          statusCode,
           durationMs: duration,
           requestPayload: req.body,
           responsePayload: error?.error,
           errorMessage: errorMsg,
+          errorType: classifyRequestError(error, statusCode),
+          errorCode: error?.code || error?.error?.name || error?.name,
+          stackTrace: error?.stack,
+          requestId,
+          serverRequestId: error?.headers?.get?.('x-request-id') || error?.headers?.get?.('cf-ray'),
         });
 
         return throwError(() => error);

@@ -28,6 +28,23 @@ import { Router, NavigationEnd } from '@angular/router';
 import { Observable, throwError } from 'rxjs';
 import { tap, catchError } from 'rxjs/operators';
 
+const createRequestId = (): string => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
+const classifyRequestError = (error: any, statusCode: number): string | null => {
+  if (statusCode === 408 || statusCode === 504) return 'timeout';
+  if (statusCode >= 500) return 'server_error';
+  if (statusCode >= 400) return 'http_error';
+  const message = `${error?.name || ''} ${error?.error?.name || ''} ${error?.message || ''} ${error?.error?.message || ''}`.toLowerCase();
+  if (/timeout|timed out|deadline exceeded/.test(message)) return 'timeout';
+  if (statusCode === 0) return 'network_error';
+  return null;
+};
+
 export interface TelemetryConfig {
   appId: string;
   serverUrl?: string;
@@ -249,6 +266,11 @@ export class ApiLoggerService {
     requestPayload?: any;
     responsePayload?: any;
     errorMessage?: string;
+    errorType?: string | null;
+    errorCode?: string | null;
+    stackTrace?: string | null;
+    requestId?: string;
+    serverRequestId?: string | null;
   }): void {
     // Tránh vòng lặp vô tận: Không log các request gửi tới chính server telemetry
     if (params.endpoint.includes(ApiLoggerService._serverUrl)) {
@@ -272,6 +294,11 @@ export class ApiLoggerService {
           ? JSON.stringify(safeReq).slice(0, 2000)
           : (safeReq ? String(safeReq).slice(0, 2000) : null),
         error_message: params.errorMessage || null,
+        error_type: params.errorType || null,
+        error_code: params.errorCode || null,
+        stack_trace: params.stackTrace || null,
+        request_id: params.requestId || null,
+        server_request_id: params.serverRequestId || null,
         device_name: ApiLoggerService.deviceName,
         user_name: ApiLoggerService.userName || undefined,
       };
@@ -383,6 +410,7 @@ export const apiLoggerInterceptor: HttpInterceptorFn = (req, next) => {
   }
 
   const startTime = Date.now();
+  const requestId = createRequestId();
 
   return next(req).pipe(
     tap({
@@ -396,30 +424,37 @@ export const apiLoggerInterceptor: HttpInterceptorFn = (req, next) => {
             durationMs: duration,
             requestPayload: req.body,
             responsePayload: event.body,
+            requestId,
+            serverRequestId: event.headers.get('x-request-id') || event.headers.get('cf-ray'),
           });
         }
       },
     }),
     catchError((error: any) => {
       const duration = Date.now() - startTime;
-      let statusCode = 500;
+      let statusCode = 0;
       let errorMsg = error?.message || 'Unknown Network Error';
 
       if (error instanceof HttpErrorResponse) {
         statusCode = error.status;
         errorMsg = typeof error.error === 'string'
           ? error.error
-          : (error.error?.message || error.message || error.statusText);
+          : (error.error?.message || error.error?.error || error.error?.detail || error.error?.msg || error.message || error.statusText);
       }
 
       ApiLoggerService.sendApiLog({
         endpoint: req.urlWithParams || req.url,
         method: req.method,
-        statusCode: statusCode || 500,
+        statusCode,
         durationMs: duration,
         requestPayload: req.body,
         responsePayload: error?.error,
         errorMessage: errorMsg,
+        errorType: classifyRequestError(error, statusCode),
+        errorCode: error?.code || error?.error?.name || error?.name || null,
+        stackTrace: error?.stack || null,
+        requestId,
+        serverRequestId: error?.headers?.get?.('x-request-id') || error?.headers?.get?.('cf-ray') || null,
       });
 
       return throwError(() => error);
@@ -442,6 +477,7 @@ export class ApiLoggerInterceptor implements HttpInterceptor {
     }
 
     const startTime = Date.now();
+    const requestId = createRequestId();
 
     return next.handle(req).pipe(
       tap({
@@ -455,30 +491,37 @@ export class ApiLoggerInterceptor implements HttpInterceptor {
               durationMs: duration,
               requestPayload: req.body,
               responsePayload: event.body,
+              requestId,
+              serverRequestId: event.headers.get('x-request-id') || event.headers.get('cf-ray'),
             });
           }
         },
       }),
       catchError((error: any) => {
         const duration = Date.now() - startTime;
-        let statusCode = 500;
+        let statusCode = 0;
         let errorMsg = error?.message || 'Unknown Network Error';
 
         if (error instanceof HttpErrorResponse) {
           statusCode = error.status;
           errorMsg = typeof error.error === 'string'
             ? error.error
-            : (error.error?.message || error.message || error.statusText);
+            : (error.error?.message || error.error?.error || error.error?.detail || error.error?.msg || error.message || error.statusText);
         }
 
         ApiLoggerService.sendApiLog({
           endpoint: req.urlWithParams || req.url,
           method: req.method,
-          statusCode: statusCode || 500,
+          statusCode,
           durationMs: duration,
           requestPayload: req.body,
           responsePayload: error?.error,
           errorMessage: errorMsg,
+          errorType: classifyRequestError(error, statusCode),
+          errorCode: error?.code || error?.error?.name || error?.name || null,
+          stackTrace: error?.stack || null,
+          requestId,
+          serverRequestId: error?.headers?.get?.('x-request-id') || error?.headers?.get?.('cf-ray') || null,
         });
 
         return throwError(() => error);

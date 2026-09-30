@@ -7,6 +7,12 @@
 > - **Tên thiết bị (`device_name`)**: Tên dòng máy thật (ví dụ: `iPhone 14 Pro`, `Samsung Galaxy S23`...).
 > - **IP máy (`ip_address`)**: Server Cloudflare tự động phát hiện và ghi nhận (Flutter không cần lấy IP).
 
+## Theo dõi Timeout và nguyên nhân lỗi
+
+SDK mới gửi riêng `timeout`, `network_error`, lỗi HTTP, mã lỗi, stack trace và request ID. Trong Dashboard, mở tab **Timeout / Mạng** để lọc nhanh; mở một dòng lỗi để xem nguyên nhân, thời lượng và stack trace. Khi dùng `LoggingClient`, đặt `timeout` bằng đúng thời hạn app đang dùng (ví dụ 15 giây). Nếu app đã tích hợp SDK cũ, cần cập nhật interceptor/client trong app rồi phát hành app mới để các trường chẩn đoán bắt đầu được gửi; log cũ không thể tự suy ra chính xác là timeout hay mất mạng.
+
+Với lỗi 500 phát sinh bên trong Worker `flow-api`, mở **Cloudflare Dashboard → Workers & Pages → flow-api → Observability**. Tìm theo `request_id` hiển thị trong chi tiết API; log `flow_api_exception` có message và stack trace, còn `flow_api_slow_request` đánh dấu request mất từ 5 giây trở lên. Lỗi runtime như Worker vượt CPU hoặc uncaught exception cũng xuất hiện trong mục Errors/Workers Logs của Cloudflare.
+
 ---
 
 ## 🚀 PROMPT COPY DÀNH CHO BÊN FLUTTER (HOẶC AI DEV)
@@ -159,18 +165,29 @@ class AppTelemetry {
 class LoggingClient extends http.BaseClient {
   final http.Client _inner;
   final String appId;
+  final Duration? timeout;
 
-  LoggingClient(this._inner, {this.appId = 'vn.fizahub.app'});
+  LoggingClient(this._inner, {this.appId = 'vn.fizahub.app', this.timeout});
+
+  Future<T> _withTimeout<T>(Future<T> future, DateTime startTime) {
+    if (timeout == null) return future;
+    final remaining = timeout! - DateTime.now().difference(startTime);
+    if (remaining <= Duration.zero) {
+      return Future<T>.error(TimeoutException('API request exceeded ${timeout!.inMilliseconds}ms'));
+    }
+    return future.timeout(remaining);
+  }
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     final startTime = DateTime.now();
+    final requestId = DateTime.now().microsecondsSinceEpoch.toRadixString(16);
     http.StreamedResponse response;
     try {
-      response = await _inner.send(request);
-      final duration = DateTime.now().difference(startTime).inMilliseconds;
+      response = await _withTimeout(_inner.send(request), startTime);
 
-      final bytes = await response.stream.toBytes();
+      final bytes = await _withTimeout(response.stream.toBytes(), startTime);
+      final duration = DateTime.now().difference(startTime).inMilliseconds;
       final responseBody = utf8.decode(bytes, allowMalformed: true);
 
       _sendLog(
@@ -179,6 +196,8 @@ class LoggingClient extends http.BaseClient {
         statusCode: response.statusCode,
         durationMs: duration,
         responsePayload: responseBody,
+        requestId: requestId,
+        serverRequestId: response.headers['x-request-id'] ?? response.headers['cf-ray'],
       );
 
       return http.StreamedResponse(
@@ -196,11 +215,14 @@ class LoggingClient extends http.BaseClient {
       _sendLog(
         endpoint: request.url.toString(),
         method: request.method,
-        statusCode: 500,
+        statusCode: e is TimeoutException ? 408 : 0,
         durationMs: duration,
         errorMessage: e.toString(),
+        errorType: e is TimeoutException ? 'timeout' : 'network_error',
+        errorCode: e.runtimeType.toString(),
+        stackTrace: stack.toString(),
+        requestId: requestId,
       );
-      AppTelemetry.recordCrash(exception: e, stack: stack, isFatal: false);
       rethrow;
     }
   }
@@ -212,6 +234,11 @@ class LoggingClient extends http.BaseClient {
     required int durationMs,
     String? responsePayload,
     String? errorMessage,
+    String? errorType,
+    String? errorCode,
+    String? stackTrace,
+    String? requestId,
+    String? serverRequestId,
   }) {
     try {
       http.post(
@@ -225,6 +252,11 @@ class LoggingClient extends http.BaseClient {
           'duration_ms': durationMs,
           'response_payload': responsePayload,
           'error_message': errorMessage,
+          'error_type': errorType,
+          'error_code': errorCode,
+          'stack_trace': stackTrace,
+          'request_id': requestId ?? DateTime.now().microsecondsSinceEpoch.toRadixString(16),
+          'server_request_id': serverRequestId,
           'device_name': AppTelemetry.deviceName,
           if (AppTelemetry.userName != null && AppTelemetry.userName!.isNotEmpty)
             'user_name': AppTelemetry.userName,
@@ -287,6 +319,7 @@ import 'app/core/utils/api_logger.dart';
 final http.Client apiClient = LoggingClient(
   http.Client(),
   appId: 'vn.fizahub.app',
+  timeout: const Duration(seconds: 15), // dùng đúng ngưỡng timeout của app
 );
 
 // Mọi lệnh gọi API qua apiClient này:

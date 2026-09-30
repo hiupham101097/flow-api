@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
@@ -10,7 +11,7 @@ import 'package:http/http.dart' as http;
 /// 1. Transparently wraps `http.Client` without interrupting the response stream.
 /// 2. Records Status 200 Response Data (JSON or text).
 /// 3. Intelligently extracts error details for Status 400 (Client Errors / Validation)
-///    and Status 500 (Server Crashes / Network Exceptions).
+///    5xx responses, timeouts, and network failures separately.
 /// 4. Provides a standalone `ApiLogger.record()` method for use with Dio, Chopper,
 ///    or manual calls.
 ///
@@ -53,8 +54,15 @@ import 'package:http/http.dart' as http;
 ///     ApiLogger.record(
 ///       endpoint: err.requestOptions.uri.toString(),
 ///       method: err.requestOptions.method,
-///       statusCode: err.response?.statusCode ?? 500,
+///       statusCode: err.response?.statusCode ?? 0,
 ///       errorMessage: err.message ?? err.error?.toString(),
+///       errorType: err.response?.statusCode == 408 || err.response?.statusCode == 504
+///           ? 'timeout'
+///           : err.response?.statusCode != null
+///               ? (err.response!.statusCode! >= 500 ? 'server_error' : 'http_error')
+///           : (err.type.name.toLowerCase().contains('timeout') ? 'timeout' : 'network_error'),
+///       errorCode: err.type.name,
+///       stackTrace: err.stackTrace.toString(),
 ///       requestPayload: err.requestOptions.data,
 ///       responsePayload: err.response?.data,
 ///       durationMs: duration,
@@ -66,6 +74,7 @@ import 'package:http/http.dart' as http;
 class LoggingClient extends http.BaseClient {
   final http.Client _inner;
   final String appId;
+  final Duration? timeout;
 
   static const String _apiMonitorUrl = String.fromEnvironment(
     'API_MONITOR_URL',
@@ -80,11 +89,22 @@ class LoggingClient extends http.BaseClient {
     this.appId = 'default_app',
     this.deviceName,
     this.userName,
+    this.timeout,
   });
+
+  Future<T> _withTimeout<T>(Future<T> future, DateTime startTime) {
+    if (timeout == null) return future;
+    final remaining = timeout! - DateTime.now().difference(startTime);
+    if (remaining <= Duration.zero) {
+      return Future<T>.error(TimeoutException('API request exceeded ${timeout!.inMilliseconds}ms'));
+    }
+    return future.timeout(remaining);
+  }
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     final startTime = DateTime.now();
+    final requestId = ApiLogger.createRequestId();
 
     // Extract request payload if available
     dynamic requestPayload;
@@ -97,11 +117,11 @@ class LoggingClient extends http.BaseClient {
     }
 
     try {
-      final response = await _inner.send(request);
-      final duration = DateTime.now().difference(startTime).inMilliseconds;
+      final response = await _withTimeout(_inner.send(request), startTime);
 
       // Read response stream without blocking the caller
-      final Uint8List bytes = await response.stream.toBytes();
+      final Uint8List bytes = await _withTimeout(response.stream.toBytes(), startTime);
+      final duration = DateTime.now().difference(startTime).inMilliseconds;
 
       // Decode response body string safely
       String? responseString;
@@ -150,9 +170,16 @@ class LoggingClient extends http.BaseClient {
         method: request.method,
         statusCode: response.statusCode,
         errorMessage: errorMessage,
+        errorType: response.statusCode == 408 || response.statusCode == 504
+            ? 'timeout'
+            : (response.statusCode >= 500
+                ? 'server_error'
+                : (response.statusCode >= 400 ? 'http_error' : null)),
+        serverRequestId: response.headers['x-request-id'] ?? response.headers['cf-ray'],
         requestPayload: requestPayload,
         responsePayload: parsedResponse ?? responseString,
         durationMs: duration,
+        requestId: requestId,
         appId: appId,
         deviceName: deviceName,
         userName: userName,
@@ -160,17 +187,22 @@ class LoggingClient extends http.BaseClient {
       );
 
       return clonedResponse;
-    } catch (error) {
+    } catch (error, stackTrace) {
       final duration = DateTime.now().difference(startTime).inMilliseconds;
+      final isTimeout = error is TimeoutException;
 
       ApiLogger.record(
         endpoint: request.url.toString(),
         method: request.method,
-        statusCode: 500,
+        statusCode: isTimeout ? 408 : 0,
         errorMessage: error.toString(),
+        errorType: isTimeout ? 'timeout' : 'network_error',
+        errorCode: error.runtimeType.toString(),
+        stackTrace: stackTrace.toString(),
         requestPayload: requestPayload,
         responsePayload: null,
         durationMs: duration,
+        requestId: requestId,
         appId: appId,
         deviceName: deviceName,
         userName: userName,
@@ -222,6 +254,12 @@ class ApiLogger {
     'API_MONITOR_URL',
     defaultValue: 'https://flow-api.hieupham101097.workers.dev',
   );
+
+  static String createRequestId() {
+    final random = math.Random.secure();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    return bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+  }
 
   static final List<String> _piiKeys = [
     'password', 'pass', 'pwd', 'token', 'access_token', 'refresh_token',
@@ -316,6 +354,11 @@ class ApiLogger {
     required String method,
     required int statusCode,
     String? errorMessage,
+    String? errorType,
+    String? errorCode,
+    String? stackTrace,
+    String? requestId,
+    String? serverRequestId,
     dynamic requestPayload,
     dynamic responsePayload,
     required int durationMs,
@@ -338,6 +381,11 @@ class ApiLogger {
       'method': method.toUpperCase(),
       'status_code': statusCode,
       'error_message': errorMessage,
+      'error_type': errorType,
+      'error_code': errorCode,
+      'stack_trace': stackTrace,
+      'request_id': requestId ?? createRequestId(),
+      'server_request_id': serverRequestId,
       'request_payload': safeRequest,
       'response_payload': safeResponse,
       'duration_ms': durationMs,
@@ -611,4 +659,3 @@ class AppTelemetry {
     }
   }
 }
-

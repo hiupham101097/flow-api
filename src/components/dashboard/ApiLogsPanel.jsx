@@ -17,7 +17,7 @@ const LogRow = memo(function LogRow({
   onFilterDevice,
   onFilterIp,
 }) {
-  const statusMeta = getStatusMeta(log.status_code);
+  const statusMeta = getStatusMeta(log.status_code, log.error_type);
   const summaryText = getSummarySnippet(log);
   const isApp = log.job_type === 'app';
 
@@ -99,7 +99,9 @@ const LogRow = memo(function LogRow({
       </td>
       <td>
         <span className={`status-badge ${statusMeta.badgeClass}`}>
-          {log.status_code || 0}
+          {statusMeta.type === 'timeout' || statusMeta.type === 'network'
+            ? statusMeta.label
+            : (log.status_code ?? '—')}
         </span>
       </td>
       <td className="summary-cell" title={summaryText} style={{ fontSize: '0.78rem' }}>
@@ -148,6 +150,7 @@ export default function ApiLogsPanel({
   count200 = 0,
   count400 = 0,
   count500 = 0,
+  countTransportErrors = 0,
   activeTab = 'all',
   setActiveTab,
   setMonitorQuery,
@@ -212,6 +215,15 @@ export default function ApiLogsPanel({
               onClick={() => { setActiveTab('500'); setMonitorQuery({ status: '500' }); }}
             >
               <span className="dot dot-danger" /> 5xx Lỗi Server <span className="tab-count">{count500}</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'timeout'}
+              className={`filter-tab tab-danger ${activeTab === 'timeout' ? 'active' : ''}`}
+              onClick={() => { setActiveTab('timeout'); setMonitorQuery({ status: 'timeout' }); }}
+            >
+              <span className="dot dot-danger" /> Timeout / Mạng <span className="tab-count">{countTransportErrors}</span>
             </button>
           </div>
 
