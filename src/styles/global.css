@@ -4053,7 +4053,7 @@ tbody tr.row-error:hover {
 
 .auth-input {
   width: 100%;
-  padding: 0.75rem 1rem 0.75rem 2.5rem;
+  padding: 0.75rem 1rem;
   border-radius: 10px;
   background: var(--surface-raised);
   border: 1px solid var(--line);
@@ -4061,6 +4061,41 @@ tbody tr.row-error:hover {
   font-size: 0.92rem;
   outline: none;
   transition: all 160ms ease;
+}
+
+.auth-field-label {
+  display: block;
+  margin-bottom: -0.8rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.auth-password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 0.75rem;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+
+.auth-setup-notice {
+  margin-bottom: 1rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  border-radius: 10px;
+  background: rgba(251, 191, 36, 0.08);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.auth-setup-notice p {
+  margin: 0.35rem 0 0;
 }
 
 .auth-input:focus {

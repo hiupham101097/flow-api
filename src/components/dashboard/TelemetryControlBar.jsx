@@ -440,15 +440,17 @@ export default function TelemetryControlBar({
           </div>
 
           {/* Cảnh báo Telegram */}
-          <button
-            type="button"
-            className="secondary-btn strip-action-btn"
-            onClick={onOpenTelegramModal}
-            title="Cài đặt thông báo sự cố qua Telegram Bot"
-          >
-            {ModeIcons.bell}
-            <span className="strip-btn-text">Cảnh báo</span>
-          </button>
+          {typeof onOpenTelegramModal === 'function' && (
+            <button
+              type="button"
+              className="secondary-btn strip-action-btn"
+              onClick={onOpenTelegramModal}
+              title="Cài đặt thông báo sự cố qua Telegram Bot"
+            >
+              {ModeIcons.bell}
+              <span className="strip-btn-text">Cảnh báo</span>
+            </button>
+          )}
 
           {/* Cài đặt SDK */}
           <button

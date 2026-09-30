@@ -17,6 +17,7 @@ const EventsPanel = lazy(() => import('../../components/dashboard/EventsPanel'))
 const EventFunnelsPanel = lazy(() => import('../../components/dashboard/EventFunnelsPanel'));
 import { exportToCsv } from '../../utils/exportCsv';
 import { usePlatform } from '../../context/PlatformContext';
+import { useAuth } from '../../context/AuthContext';
 import { API_MONITOR_URL } from '../../constants/api';
 import {
   formatVietnamDate,
@@ -107,6 +108,7 @@ const PATH_TO_MODE = {
 };
 
 function Dashboard() {
+  const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const { mode: routeMode } = useParams();
   const navigate = useNavigate();
@@ -1419,7 +1421,7 @@ export const appConfig: ApplicationConfig = {
         activeUserJob={activeUserJob}
         refreshInterval={refreshInterval}
         onRefreshIntervalChange={(val) => setRefreshInterval(Number(val))}
-        onOpenTelegramModal={() => setTelegramModalOpen(true)}
+        onOpenTelegramModal={user?.role === 'owner' ? () => setTelegramModalOpen(true) : undefined}
         onNavigateSetup={() => navigate('/admin/setup')}
         onRefresh={() => { setLoading(true); fetchAllTelemetry(); }}
         loading={loading}

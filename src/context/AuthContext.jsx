@@ -1,91 +1,84 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { useNavigate, Navigate } from 'react-router-dom';
-import { getStoredAuthUser, setStoredAuthUser, clearStoredAuthUser, setStoredPlatformScope } from '../utils/cookies';
-import { usePlatform } from './PlatformContext';
-
-const USERS_DB = [
-  {
-    username: 'web-dev',
-    password: '123qwe',
-    role: 'web',
-    name: 'Web Developer',
-    description: 'Chuyên viên Quản lý Hệ thống Web (Angular / React)',
-  },
-  {
-    username: 'app-dev',
-    password: '123qwe',
-    role: 'app',
-    name: 'Flutter App Developer',
-    description: 'Chuyên viên Quản lý Ứng dụng Di động (Flutter / Mobile)',
-  },
-];
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { Navigate } from 'react-router-dom';
+import { API_BASE_URL } from '../constants/api';
 
 const AuthContext = createContext({
   user: null,
   isAuthenticated: false,
-  login: () => ({ success: false }),
-  logout: () => {},
+  isLoading: true,
+  login: async () => ({ success: false }),
+  logout: async () => {},
+  refreshSession: async () => null,
 });
 
+async function authRequest(path, options = {}) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    credentials: 'include',
+    cache: 'no-store',
+    ...options,
+    headers: {
+      Accept: 'application/json',
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...options.headers,
+    },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || 'Authentication request failed');
+  return data;
+}
+
 export function AuthProvider({ children }) {
-  const initialUser = getStoredAuthUser();
-  const [user, setUser] = useState(initialUser);
-  const { selectPlatform } = usePlatform();
+  const [user, setUser] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Đồng bộ platformScope tương ứng với role của user khi load lại trang
-  useEffect(() => {
-    if (user && user.role) {
-      selectPlatform(user.role, true);
+  const refreshSession = async () => {
+    try {
+      const data = await authRequest('/auth/me');
+      setUser(data.user || null);
+      return data.user || null;
+    } catch (_) {
+      setUser(null);
+      return null;
+    } finally {
+      setIsLoading(false);
     }
-  }, [user]);
-
-  const login = (username, password) => {
-    const cleanUser = String(username || '').trim().toLowerCase();
-    const cleanPass = String(password || '').trim();
-
-    const matched = USERS_DB.find(
-      (u) => u.username === cleanUser && u.password === cleanPass
-    );
-
-    if (!matched) {
-      return {
-        success: false,
-        error: 'Tên đăng nhập hoặc mật khẩu không chính xác. (Mật khẩu mặc định: 123qwe)',
-      };
-    }
-
-    const userData = {
-      username: matched.username,
-      role: matched.role,
-      name: matched.name,
-      description: matched.description,
-    };
-
-    setUser(userData);
-    setStoredAuthUser(userData);
-
-    // Chuyển role phân hệ và lưu cookie:
-    // web-dev -> xem log của web
-    // app-dev -> xem log của app flutter
-    selectPlatform(matched.role, true);
-
-    return { success: true, user: userData };
   };
 
-  const logout = () => {
-    setUser(null);
-    clearStoredAuthUser();
+  useEffect(() => {
+    refreshSession();
+  }, []);
+
+  const login = async (email, password) => {
+    try {
+      const data = await authRequest('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
+      });
+      setUser(data.user || null);
+      return { success: true, user: data.user };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  };
+
+  const logout = async () => {
+    try {
+      await authRequest('/auth/logout', { method: 'POST' });
+    } finally {
+      setUser(null);
+    }
   };
 
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        isAuthenticated: Boolean(user),
-        login,
-        logout,
-      }}
-    >
+    <AuthContext.Provider value={{
+      user,
+      isAuthenticated: Boolean(user),
+      isLoading,
+      login,
+      logout,
+      refreshSession,
+      authRequest,
+    }}>
       {children}
     </AuthContext.Provider>
   );
@@ -93,21 +86,19 @@ export function AuthProvider({ children }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
+  if (!context) throw new Error('useAuth must be used within an AuthProvider');
   return context;
 }
 
-/**
- * Component bảo vệ các trang Dashboard - bắt buộc phải đăng nhập mới được vào
- */
 export function ProtectedRoute({ children }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
+  if (isLoading) return <div className="page-loading">Đang kiểm tra phiên đăng nhập…</div>;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  return children;
+}
 
-  if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
-  }
-
+export function OwnerRoute({ children }) {
+  const { user } = useAuth();
+  if (user?.role !== 'owner') return <Navigate to="/admin/monitor/logs" replace />;
   return children;
 }

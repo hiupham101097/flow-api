@@ -1,4 +1,9 @@
-export const API_BASE_URL = import.meta.env.VITE_WORKER_URL || 'https://flow-api.hieupham101097.workers.dev';
+const DEFAULT_WORKER_URL = 'https://flow-api.hieupham101097.workers.dev';
+const DEFAULT_API_BASE_URL = import.meta.env.DEV
+  ? DEFAULT_WORKER_URL
+  : (typeof window !== 'undefined' ? window.location.origin : '');
+
+export const API_BASE_URL = import.meta.env.VITE_WORKER_URL || DEFAULT_API_BASE_URL;
 export const API_MONITOR_URL = API_BASE_URL;
 
 /**

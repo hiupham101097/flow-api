@@ -24,6 +24,7 @@ function UserManager() {
   const [formData, setFormData] = useState({
     name: '',
     email: '',
+    password: '',
     job_type: platformScope === 'web' ? 'web' : 'app',
     job_name: '',
     app_identifier: '',
@@ -67,8 +68,8 @@ function UserManager() {
 
   const handleCreateUserAndJob = async (e) => {
     e.preventDefault();
-    if (!formData.name.trim() || !formData.email.trim()) {
-      setSubmitError('Vui lòng điền Họ tên và Email người dùng');
+    if (!formData.name.trim() || !formData.email.trim() || formData.password.length < 12) {
+      setSubmitError('Vui lòng nhập họ tên, email và mật khẩu ban đầu có ít nhất 12 ký tự.');
       return;
     }
 
@@ -82,6 +83,7 @@ function UserManager() {
         body: JSON.stringify({
           name: formData.name.trim(),
           email: formData.email.trim(),
+          password: formData.password,
           job_type: formData.job_type,
           job_name: formData.job_name.trim() || `${formData.name.trim()}'s ${formData.job_type === 'web' ? 'Web' : 'App'}`,
           app_identifier: (formData.app_identifier || `${formData.job_type}_${Date.now()}`).trim(),
@@ -99,6 +101,7 @@ function UserManager() {
       setFormData({
         name: '',
         email: '',
+        password: '',
         job_type: platformScope === 'web' ? 'web' : 'app',
         job_name: '',
         app_identifier: '',
@@ -199,6 +202,7 @@ function UserManager() {
               setFormData({
                 name: '',
                 email: '',
+                password: '',
                 job_type: platformScope === 'web' ? 'web' : 'app',
                 job_name: '',
                 app_identifier: '',
@@ -475,6 +479,21 @@ function UserManager() {
                     value={formData.email}
                     onChange={(e) => handleInputChange('email', e.target.value)}
                   />
+                </div>
+
+                <div className="form-group">
+                  <label>Mật khẩu đăng nhập ban đầu (tối thiểu 12 ký tự) <span style={{ color: 'var(--danger)' }}>*</span></label>
+                  <input
+                    type="password"
+                    required
+                    minLength={12}
+                    autoComplete="new-password"
+                    value={formData.password}
+                    onChange={(e) => handleInputChange('password', e.target.value)}
+                  />
+                  <small style={{ color: 'var(--text-dim)', marginTop: '0.3rem', display: 'block' }}>
+                    Chuyển mật khẩu cho đối tác qua kênh riêng. Hệ thống chỉ lưu bản băm.
+                  </small>
                 </div>
 
                 <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--accent)', borderBottom: '1px solid var(--line)', paddingBottom: '0.4rem', marginTop: '1.25rem' }}>

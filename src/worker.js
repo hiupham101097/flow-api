@@ -281,6 +281,7 @@ const normalizeFunnelConfig = (raw) => {
 const mapFunnelRow = (row) => ({
   id: row.id,
   funnel_key: row.funnel_key,
+  tenant_id: Number(row.tenant_id || 1),
   name: row.name,
   app_identifier: row.app_identifier || null,
   event_prefix: row.event_prefix || null,
@@ -388,6 +389,8 @@ async function computeFunnelStats(db, funnel, options = {}) {
     scopeClause += ' AND e.app_identifier = ?';
     scopeParams.push(effectiveApp);
   }
+  scopeClause += ' AND e.tenant_id = ?';
+  scopeParams.push(Number(funnel.tenant_id || 1));
   if (jobId) {
     scopeClause += ' AND e.job_id = ?';
     scopeParams.push(Number(jobId));
@@ -682,15 +685,60 @@ async function ensureSchema(db) {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         email TEXT UNIQUE NOT NULL,
+        tenant_id INTEGER NOT NULL DEFAULT 1,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `).run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS tenants (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `).run();
+    await db.prepare("INSERT OR IGNORE INTO tenants (id, name) VALUES (1, 'Tenant 1')").run();
+
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS dashboard_accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        password_salt TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL CHECK(role IN ('owner', 'tenant')),
+        tenant_id INTEGER NOT NULL DEFAULT 1 REFERENCES tenants(id),
+        user_id INTEGER UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        CHECK ((role = 'owner' AND user_id IS NULL) OR (role = 'tenant' AND user_id IS NOT NULL))
+      )
+    `).run();
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS dashboard_sessions (
+        token_hash TEXT PRIMARY KEY,
+        account_id INTEGER NOT NULL REFERENCES dashboard_accounts(id) ON DELETE CASCADE,
+        expires_at TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `).run();
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS auth_login_attempts (
+        attempt_key TEXT PRIMARY KEY,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        window_started_at INTEGER NOT NULL,
+        locked_until INTEGER NOT NULL DEFAULT 0,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `).run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_dashboard_sessions_expiry ON dashboard_sessions(expires_at)').run();
+    await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_dashboard_single_owner ON dashboard_accounts(role) WHERE role = 'owner'").run();
 
     // 2. Tạo bảng jobs nếu chưa có
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS jobs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+        tenant_id INTEGER NOT NULL DEFAULT 1 REFERENCES tenants(id),
         name TEXT NOT NULL,
         type TEXT NOT NULL CHECK(type IN ('app', 'web')),
         app_identifier TEXT UNIQUE NOT NULL,
@@ -704,6 +752,7 @@ async function ensureSchema(db) {
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS api_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tenant_id INTEGER NOT NULL DEFAULT 1 REFERENCES tenants(id),
         job_id INTEGER,
         app_identifier TEXT,
         endpoint TEXT NOT NULL,
@@ -719,6 +768,14 @@ async function ensureSchema(db) {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `).run();
+
+    for (const [table, column] of [
+      ['users', 'tenant_id INTEGER NOT NULL DEFAULT 1'],
+      ['jobs', 'tenant_id INTEGER NOT NULL DEFAULT 1'],
+      ['api_logs', 'tenant_id INTEGER NOT NULL DEFAULT 1'],
+    ]) {
+      try { await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column}`).run(); } catch (_) {}
+    }
 
     // Vá cho DB đã tạo từ phiên bản cũ (CREATE TABLE IF NOT EXISTS không thêm cột).
     // ALTER không idempotent nên bọc try/catch cho lần chạy thứ hai trở đi.
@@ -744,6 +801,7 @@ async function ensureSchema(db) {
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS app_crashes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tenant_id INTEGER NOT NULL DEFAULT 1 REFERENCES tenants(id),
         job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
         app_identifier TEXT,
         error_message TEXT NOT NULL,
@@ -754,6 +812,7 @@ async function ensureSchema(db) {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `).run();
+    try { await db.prepare('ALTER TABLE app_crashes ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1').run(); } catch (_) {}
 
     try {
       await db.prepare('ALTER TABLE app_crashes ADD COLUMN device_name TEXT').run();
@@ -766,6 +825,7 @@ async function ensureSchema(db) {
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS app_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tenant_id INTEGER NOT NULL DEFAULT 1 REFERENCES tenants(id),
         job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
         app_identifier TEXT,
         event_name TEXT NOT NULL,
@@ -777,6 +837,7 @@ async function ensureSchema(db) {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `).run();
+    try { await db.prepare('ALTER TABLE app_events ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1').run(); } catch (_) {}
 
     // 6b. Bổ sung cột định danh người dùng / thiết bị cho app_events.
     // App đã gửi user_name + device_name trong payload từ lâu nhưng server bỏ qua,
@@ -793,6 +854,7 @@ async function ensureSchema(db) {
       CREATE TABLE IF NOT EXISTS event_funnels (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         funnel_key TEXT UNIQUE NOT NULL,
+        tenant_id INTEGER NOT NULL DEFAULT 1 REFERENCES tenants(id),
         name TEXT NOT NULL,
         app_identifier TEXT,
         event_prefix TEXT,
@@ -801,11 +863,13 @@ async function ensureSchema(db) {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `).run();
+    try { await db.prepare('ALTER TABLE event_funnels ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1').run(); } catch (_) {}
 
     // 8. Rollup theo ngày: app_events chỉ giữ vài ngày, bảng này giữ lịch sử dài hạn
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS event_funnel_daily (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tenant_id INTEGER NOT NULL DEFAULT 1 REFERENCES tenants(id),
         funnel_key TEXT NOT NULL,
         app_identifier TEXT,
         day TEXT NOT NULL,
@@ -821,16 +885,20 @@ async function ensureSchema(db) {
         UNIQUE(funnel_key, app_identifier, day)
       )
     `).run();
+    try { await db.prepare('ALTER TABLE event_funnel_daily ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1').run(); } catch (_) {}
 
     for (const index of [
       'CREATE INDEX IF NOT EXISTS idx_logs_created_at ON api_logs(created_at DESC)',
+      'CREATE INDEX IF NOT EXISTS idx_logs_tenant_id_desc ON api_logs(tenant_id, id DESC)',
       // Sắp theo id chứ không phải created_at: danh sách luôn ORDER BY id DESC nên
       // index này phục vụ được cả lọc lẫn sắp xếp, khỏi dựng b-tree tạm.
       'CREATE INDEX IF NOT EXISTS idx_logs_job_id_desc ON api_logs(job_id, id DESC)',
       'CREATE INDEX IF NOT EXISTS idx_logs_app_id_desc ON api_logs(app_identifier, id DESC)',
       'CREATE INDEX IF NOT EXISTS idx_crashes_created_at ON app_crashes(created_at DESC)',
+      'CREATE INDEX IF NOT EXISTS idx_crashes_tenant_id_desc ON app_crashes(tenant_id, id DESC)',
       'CREATE INDEX IF NOT EXISTS idx_crashes_app_id_desc ON app_crashes(app_identifier, id DESC)',
       'CREATE INDEX IF NOT EXISTS idx_events_created_at ON app_events(created_at DESC)',
+      'CREATE INDEX IF NOT EXISTS idx_events_tenant_id_desc ON app_events(tenant_id, id DESC)',
       'CREATE INDEX IF NOT EXISTS idx_events_app_id_desc ON app_events(app_identifier, id DESC)',
       'CREATE INDEX IF NOT EXISTS idx_events_name_created ON app_events(event_name, created_at DESC)',
     ]) {
@@ -841,6 +909,8 @@ async function ensureSchema(db) {
     await db.prepare(
       'CREATE INDEX IF NOT EXISTS idx_funnel_daily_lookup ON event_funnel_daily(funnel_key, day)'
     ).run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_jobs_tenant_app ON jobs(tenant_id, app_identifier)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_users_tenant_id ON users(tenant_id, id)').run();
 
     // Seed funnel sẵn có để mở tab Thống kê là thấy số ngay, khỏi cấu hình tay.
     // Tự động cập nhật tên và cấu hình chuẩn khi hệ thống nâng cấp.
@@ -874,6 +944,7 @@ async function ensureSchema(db) {
       CREATE TABLE IF NOT EXISTS issues (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         fingerprint TEXT UNIQUE NOT NULL,
+        tenant_id INTEGER NOT NULL DEFAULT 1 REFERENCES tenants(id),
         job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
         app_identifier TEXT NOT NULL,
         type TEXT NOT NULL CHECK(type IN ('crash', 'api_error')),
@@ -889,6 +960,7 @@ async function ensureSchema(db) {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `).run();
+    try { await db.prepare('ALTER TABLE issues ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1').run(); } catch (_) {}
 
     for (const idx of [
       'CREATE INDEX IF NOT EXISTS idx_issues_fingerprint ON issues(fingerprint)',
@@ -919,11 +991,12 @@ async function ensureSchema(db) {
 // ============================================================
 // GIAI ĐOẠN 1: THUẬT TOÁN ISSUE FINGERPRINTING & UPSERT LOGIC
 // ============================================================
-async function generateIssueFingerprint(type, appIdentifier, errorTitle, culprit) {
+async function generateIssueFingerprint(type, appIdentifier, errorTitle, culprit, tenantId = 1) {
   const normApp = (appIdentifier || 'unknown').trim().toLowerCase();
   const normTitle = normalizeErrorFingerprint(errorTitle || 'unknown');
   const normCulprit = normalizeErrorFingerprint(culprit || '');
-  const raw = `${type}:${normApp}:${normTitle}:${normCulprit}`;
+  const baseFingerprint = `${type}:${normApp}:${normTitle}:${normCulprit}`;
+  const raw = Number(tenantId) === 1 ? baseFingerprint : `${tenantId}:${baseFingerprint}`;
 
   const msgBuffer = new TextEncoder().encode(raw);
   const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
@@ -933,6 +1006,7 @@ async function generateIssueFingerprint(type, appIdentifier, errorTitle, culprit
 
 async function upsertIssueRecord(db, {
   fingerprint,
+  tenantId = 1,
   jobId = null,
   appIdentifier,
   type,
@@ -950,10 +1024,10 @@ async function upsertIssueRecord(db, {
 
     const row = await db.prepare(`
       INSERT INTO issues (
-        fingerprint, job_id, app_identifier, type, title, culprit,
+        fingerprint, tenant_id, job_id, app_identifier, type, title, culprit,
         severity, status, first_seen, last_seen, total_occurrences,
         user_count, sample_payload
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'unresolved', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1, 1, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unresolved', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1, 1, ?)
       ON CONFLICT(fingerprint) DO UPDATE SET
         total_occurrences = total_occurrences + 1,
         last_seen = CURRENT_TIMESTAMP,
@@ -965,6 +1039,7 @@ async function upsertIssueRecord(db, {
       RETURNING id, fingerprint, status, total_occurrences
     `).bind(
       fingerprint,
+      tenantId,
       jobId || null,
       appIdentifier || 'unknown',
       type,
@@ -1349,6 +1424,111 @@ const isD1QuotaExceeded = (err) => {
 const QUOTA_MESSAGE =
   'Tài khoản Cloudflare D1 Free Tier đã dùng hết hạn mức đọc trong ngày (reset lúc 00:00 UTC / 07:00 sáng giờ VN).';
 
+const SESSION_COOKIE_NAME = 'flow_session';
+const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 14;
+const PASSWORD_HASH_ITERATIONS = 310000;
+const textEncoder = new TextEncoder();
+
+const bytesToHex = (bytes) => Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+
+const randomHex = (byteLength) => {
+  const bytes = new Uint8Array(byteLength);
+  crypto.getRandomValues(bytes);
+  return bytesToHex(bytes);
+};
+
+const sha256Hex = async (value) =>
+  bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', textEncoder.encode(String(value)))));
+
+async function hashDashboardPassword(password, salt = randomHex(16)) {
+  const key = await crypto.subtle.importKey('raw', textEncoder.encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', salt: Uint8Array.from(salt.match(/.{2}/g), (pair) => parseInt(pair, 16)), iterations: PASSWORD_HASH_ITERATIONS },
+    key,
+    256
+  );
+  return { salt, hash: bytesToHex(new Uint8Array(bits)) };
+}
+
+const constantTimeEqual = (left, right) => {
+  const a = String(left || '');
+  const b = String(right || '');
+  let difference = a.length ^ b.length;
+  const length = Math.max(a.length, b.length);
+  for (let index = 0; index < length; index += 1) {
+    difference |= (a.charCodeAt(index) || 0) ^ (b.charCodeAt(index) || 0);
+  }
+  return difference === 0;
+};
+
+const getCookieValue = (request, name) => {
+  const cookieHeader = request.headers.get('cookie') || '';
+  const cookie = cookieHeader.split(';').map((part) => part.trim()).find((part) => part.startsWith(`${name}=`));
+  return cookie ? cookie.slice(name.length + 1) : null;
+};
+
+const getSessionCookie = (request, token, maxAge = SESSION_MAX_AGE_SECONDS) => {
+  const secure = new URL(request.url).protocol === 'https:' ? '; Secure' : '';
+  return `${SESSION_COOKIE_NAME}=${token || ''}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure}`;
+};
+
+async function createDashboardSession(db, accountId) {
+  const token = randomHex(32);
+  const expiresAt = new Date(Date.now() + SESSION_MAX_AGE_SECONDS * 1000).toISOString();
+  await db.prepare(`
+    INSERT INTO dashboard_sessions (token_hash, account_id, expires_at)
+    VALUES (?, ?, ?)
+  `).bind(await sha256Hex(token), accountId, expiresAt).run();
+  return token;
+}
+
+async function readDashboardSession(db, request) {
+  const token = getCookieValue(request, SESSION_COOKIE_NAME);
+  if (!token || !/^[a-f0-9]{64}$/i.test(token)) return null;
+  const row = await db.prepare(`
+    SELECT a.id, a.email, a.name, a.role, a.tenant_id, a.user_id, s.expires_at
+    FROM dashboard_sessions s
+    JOIN dashboard_accounts a ON a.id = s.account_id
+    WHERE s.token_hash = ?
+    LIMIT 1
+  `).bind(await sha256Hex(token)).first();
+  if (!row || Date.parse(row.expires_at) <= Date.now()) return null;
+  return {
+    accountId: row.id,
+    email: row.email,
+    name: row.name,
+    role: row.role,
+    tenantId: Number(row.tenant_id || 1),
+    userId: row.user_id === null ? null : Number(row.user_id),
+  };
+}
+
+async function resolveIngestScope(db, appIdentifier, submittedJobId = null) {
+  let job = null;
+  if (appIdentifier) {
+    job = await db.prepare('SELECT id, tenant_id, app_identifier FROM jobs WHERE app_identifier = ? LIMIT 1')
+      .bind(appIdentifier).first();
+  } else if (submittedJobId) {
+    job = await db.prepare('SELECT id, tenant_id, app_identifier FROM jobs WHERE id = ? LIMIT 1')
+      .bind(Number(submittedJobId)).first();
+  }
+  return {
+    jobId: job?.id ?? null,
+    tenantId: Number(job?.tenant_id || 1),
+    appIdentifier: job?.app_identifier || appIdentifier || '',
+  };
+}
+
+const publicAccount = (account) => ({
+  email: account.email,
+  name: account.name,
+  role: account.role,
+  tenant_id: account.tenantId,
+  user_id: account.userId,
+});
+
+const isValidPassword = (value) => typeof value === 'string' && value.length >= 12 && value.length <= 256;
+
 // Dùng ở khối catch của các endpoint đọc: phân biệt hết hạn mức với lỗi thật.
 const readErrorResponse = (err, extra = {}, db = null, context = {}) => {
   if (isD1QuotaExceeded(err)) {
@@ -1387,11 +1567,11 @@ const formatPayload = (val) => {
   }
 };
 
-const loadFunnel = async (db, funnelKey) => {
-  const row = await db
-    .prepare('SELECT * FROM event_funnels WHERE funnel_key = ?')
-    .bind(funnelKey)
-    .first();
+const loadFunnel = async (db, funnelKey, tenantId = null) => {
+  const row = tenantId === null || tenantId === undefined
+    ? await db.prepare('SELECT * FROM event_funnels WHERE funnel_key = ?').bind(funnelKey).first()
+    : await db.prepare('SELECT * FROM event_funnels WHERE funnel_key = ? AND tenant_id = ?')
+      .bind(funnelKey, tenantId).first();
   return row ? mapFunnelRow(row) : null;
 };
 
@@ -1399,11 +1579,19 @@ const loadFunnel = async (db, funnelKey) => {
 // gợi ý khi cấu hình, nên chỉ cần nhìn vào các dòng gần nhất là đủ.
 const CATALOG_SCAN_ROWS = 5000;
 
-const listDistinctEventNames = async (db, appIdentifier = null) => {
-  const inner = appIdentifier
-    ? 'SELECT event_name FROM app_events WHERE app_identifier = ? ORDER BY created_at DESC LIMIT ?'
-    : 'SELECT event_name FROM app_events ORDER BY created_at DESC LIMIT ?';
-  const binds = appIdentifier ? [appIdentifier, CATALOG_SCAN_ROWS] : [CATALOG_SCAN_ROWS];
+const listDistinctEventNames = async (db, appIdentifier = null, tenantId = null) => {
+  let inner = 'SELECT event_name FROM app_events WHERE 1=1';
+  const binds = [];
+  if (tenantId !== null && tenantId !== undefined) {
+    inner += ' AND tenant_id = ?';
+    binds.push(tenantId);
+  }
+  if (appIdentifier) {
+    inner += ' AND app_identifier = ?';
+    binds.push(appIdentifier);
+  }
+  inner += ' ORDER BY created_at DESC LIMIT ?';
+  binds.push(CATALOG_SCAN_ROWS);
 
   const { results } = await db
     .prepare(
@@ -1416,20 +1604,20 @@ const listDistinctEventNames = async (db, appIdentifier = null) => {
 
 // Đọc các giá trị outcome thực tế trong DB rồi xếp sẵn vào nhóm, để cấu hình
 // funnel lưu xuống là tường minh và sửa được trên UI thay vì đoán lại mỗi lần.
-const deriveOutcomeBuckets = async (db, completeEvent, outcomeParam, appIdentifier) => {
+const deriveOutcomeBuckets = async (db, completeEvent, outcomeParam, appIdentifier, tenantId = 1) => {
   if (!completeEvent) return {};
   try {
     const sql = `
       SELECT DISTINCT json_extract(parameters, '$.' || ?) AS outcome
       FROM (
         SELECT parameters FROM app_events
-        WHERE event_name = ?${appIdentifier ? ' AND app_identifier = ?' : ''}
+        WHERE event_name = ? AND tenant_id = ?${appIdentifier ? ' AND app_identifier = ?' : ''}
         ORDER BY created_at DESC
         LIMIT 500
       )
       LIMIT 50
     `;
-    const binds = [outcomeParam || 'outcome', completeEvent];
+    const binds = [outcomeParam || 'outcome', completeEvent, tenantId];
     if (appIdentifier) binds.push(appIdentifier);
     const { results } = await db.prepare(sql).bind(...binds).all();
 
@@ -1477,10 +1665,10 @@ async function rollupFunnels(db, daysBack = 2) {
           .prepare(
             `
             INSERT INTO event_funnel_daily (
-              funnel_key, app_identifier, day, attempts,
+              tenant_id, funnel_key, app_identifier, day, attempts,
               outcome_auto, outcome_manual, outcome_failed, outcome_abandoned, outcome_open,
               steps_json, reasons_json, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(funnel_key, app_identifier, day) DO UPDATE SET
               attempts = excluded.attempts,
               outcome_auto = excluded.outcome_auto,
@@ -1494,6 +1682,7 @@ async function rollupFunnels(db, daysBack = 2) {
             `
           )
           .bind(
+            funnel.tenant_id || 1,
             funnel.funnel_key,
             funnel.app_identifier || '',
             day,
@@ -1538,8 +1727,8 @@ async function loadDimensions(db, force = false) {
   }
   try {
     const [jobsResult, usersResult] = await Promise.all([
-      db.prepare('SELECT id, user_id, name, type, app_identifier FROM jobs').all(),
-      db.prepare('SELECT id, name, email FROM users').all(),
+      db.prepare('SELECT id, user_id, tenant_id, name, type, app_identifier FROM jobs').all(),
+      db.prepare('SELECT id, tenant_id, name, email FROM users').all(),
     ]);
     dimensionCache = {
       at: Date.now(),
@@ -1611,8 +1800,12 @@ const decorateRows = (rows, dims) => {
  * Chuyển bộ lọc của dashboard thành MỘT điều kiện dùng được index.
  * Hỗ trợ phân quyền phân hệ platform ('web' hoặc 'app').
  */
-const buildScopeClause = (dims, { userId, jobId, appIdentifier, platform }, columnPrefix = '', deviceColumn = 'device_name') => {
+const buildScopeClause = (dims, { userId, jobId, appIdentifier, platform, tenantId }, columnPrefix = '', deviceColumn = 'device_name') => {
   let jobs = dims.jobs;
+
+  if (tenantId !== undefined && tenantId !== null) {
+    jobs = jobs.filter((job) => Number(job.tenant_id || 1) === Number(tenantId));
+  }
 
   // Lọc theo nền tảng nếu có
   if (platform === 'web') {
@@ -1626,10 +1819,16 @@ const buildScopeClause = (dims, { userId, jobId, appIdentifier, platform }, colu
   if (appIdentifier) jobs = jobs.filter((job) => job.app_identifier === appIdentifier);
 
   const appIds = Array.from(new Set(jobs.map((job) => job.app_identifier).filter(Boolean)));
-  if (!appIds.length && appIdentifier) appIds.push(appIdentifier);
+
+  if (tenantId !== undefined && tenantId !== null && !userId && !jobId && !appIdentifier) {
+    if (!platform) return { clause: '', params: [] };
+    return appIds.length
+      ? { clause: ` AND ${columnPrefix}app_identifier IN (${appIds.map(() => '?').join(', ')})`, params: appIds }
+      : { clause: ' AND 1 = 0', params: [] };
+  }
 
   // Nếu người dùng chọn đích danh userId, jobId, hoặc appIdentifier
-  if (userId || jobId || appIdentifier) {
+  if (tenantId !== undefined && tenantId !== null || userId || jobId || appIdentifier) {
     if (appIds.length) {
       return {
         clause: ` AND ${columnPrefix}app_identifier IN (${appIds.map(() => '?').join(', ')})`,
@@ -1690,6 +1889,147 @@ async function handleRequest(request, env, requestContext) {
     const path = url.pathname.replace(/\/+$/, '').replace(/^\/+/, '/');
     requestContext.path = path;
 
+    if (path.startsWith('/auth/')) {
+      await ensureSchema(env.DB);
+
+      if (path === '/auth/status' && request.method === 'GET') {
+        const owner = await env.DB.prepare("SELECT id FROM dashboard_accounts WHERE role = 'owner' LIMIT 1").first();
+        return jsonResponse({ needs_bootstrap: !owner, bootstrap_enabled: Boolean(env.DASHBOARD_BOOTSTRAP_TOKEN) });
+      }
+
+      if (path === '/auth/bootstrap' && request.method === 'POST') {
+        if (!env.DASHBOARD_BOOTSTRAP_TOKEN) {
+          return jsonResponse({ error: 'Owner bootstrap is not configured. Set DASHBOARD_BOOTSTRAP_TOKEN on the Worker.' }, 503);
+        }
+        const body = await request.json().catch(() => ({}));
+        const owner = await env.DB.prepare("SELECT id FROM dashboard_accounts WHERE role = 'owner' LIMIT 1").first();
+        const submittedTokenHash = await sha256Hex(body.bootstrap_token || '');
+        const configuredTokenHash = await sha256Hex(env.DASHBOARD_BOOTSTRAP_TOKEN);
+        if (owner || !constantTimeEqual(submittedTokenHash, configuredTokenHash)) {
+          return jsonResponse({ error: 'Setup token is invalid or owner setup is already complete.' }, 403);
+        }
+
+        const email = String(body.email || '').trim().toLowerCase();
+        const name = String(body.name || '').trim();
+        const password = body.password;
+        if (!email || !email.includes('@') || !name || !isValidPassword(password)) {
+          return jsonResponse({ error: 'Enter a valid email, name, and password of at least 12 characters.' }, 400);
+        }
+
+        const passwordRecord = await hashDashboardPassword(password);
+        let account;
+        try {
+          const result = await env.DB.prepare(`
+            INSERT INTO dashboard_accounts (email, name, password_salt, password_hash, role, tenant_id)
+            VALUES (?, ?, ?, ?, 'owner', 1)
+          `).bind(email, name.slice(0, 120), passwordRecord.salt, passwordRecord.hash).run();
+          account = { id: result.meta?.last_row_id, email, name, role: 'owner', tenantId: 1, userId: null };
+        } catch (_) {
+          return jsonResponse({ error: 'Could not create owner account. The email may already be in use.' }, 409);
+        }
+
+        const sessionToken = await createDashboardSession(env.DB, account.id);
+        const response = jsonResponse({ success: true, user: publicAccount(account) });
+        response.headers.set('Set-Cookie', getSessionCookie(request, sessionToken));
+        return response;
+      }
+
+      if (path === '/auth/login' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const email = String(body.email || '').trim().toLowerCase();
+        const rawPassword = typeof body.password === 'string' ? body.password : '';
+        const password = rawPassword.slice(0, 256);
+        const now = Date.now();
+        const remoteAddress = request.headers.get('cf-connecting-ip') || 'unknown';
+        const attemptKey = await sha256Hex(`${remoteAddress}:${email}`);
+        const priorAttempt = await env.DB.prepare('SELECT attempts, window_started_at, locked_until FROM auth_login_attempts WHERE attempt_key = ?')
+          .bind(attemptKey).first();
+        if (Number(priorAttempt?.locked_until || 0) > now) {
+          const retrySeconds = Math.max(1, Math.ceil((Number(priorAttempt.locked_until) - now) / 1000));
+          const response = jsonResponse({ error: 'Đăng nhập tạm thời bị giới hạn. Thử lại sau ít phút.' }, 429);
+          response.headers.set('Retry-After', String(retrySeconds));
+          return response;
+        }
+        const account = await env.DB.prepare(`
+          SELECT id, email, name, role, tenant_id, user_id, password_salt, password_hash
+          FROM dashboard_accounts
+          WHERE email = ?
+          LIMIT 1
+        `).bind(email).first();
+        const candidate = await hashDashboardPassword(password, account?.password_salt || randomHex(16));
+        if (!account || rawPassword.length > 256 || !constantTimeEqual(candidate.hash, account.password_hash)) {
+          const inWindow = priorAttempt && now - Number(priorAttempt.window_started_at) < 15 * 60 * 1000;
+          const attempts = inWindow ? Number(priorAttempt.attempts || 0) + 1 : 1;
+          const windowStartedAt = inWindow ? Number(priorAttempt.window_started_at) : now;
+          const lockedUntil = attempts >= 8 ? now + 15 * 60 * 1000 : 0;
+          await env.DB.prepare(`
+            INSERT INTO auth_login_attempts (attempt_key, attempts, window_started_at, locked_until, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(attempt_key) DO UPDATE SET
+              attempts = excluded.attempts,
+              window_started_at = excluded.window_started_at,
+              locked_until = excluded.locked_until,
+              updated_at = CURRENT_TIMESTAMP
+          `).bind(attemptKey, attempts, windowStartedAt, lockedUntil).run();
+          if (lockedUntil) {
+            const response = jsonResponse({ error: 'Đăng nhập tạm thời bị giới hạn. Thử lại sau ít phút.' }, 429);
+            response.headers.set('Retry-After', '900');
+            return response;
+          }
+          return jsonResponse({ error: 'Email hoặc mật khẩu không chính xác.' }, 401);
+        }
+
+        await env.DB.prepare('DELETE FROM auth_login_attempts WHERE attempt_key = ?').bind(attemptKey).run();
+
+        const sessionToken = await createDashboardSession(env.DB, account.id);
+        const session = {
+          email: account.email,
+          name: account.name,
+          role: account.role,
+          tenantId: Number(account.tenant_id || 1),
+          userId: account.user_id === null ? null : Number(account.user_id),
+        };
+        const response = jsonResponse({ success: true, user: publicAccount(session) });
+        response.headers.set('Set-Cookie', getSessionCookie(request, sessionToken));
+        return response;
+      }
+
+      if (path === '/auth/me' && request.method === 'GET') {
+        const session = await readDashboardSession(env.DB, request);
+        return session
+          ? jsonResponse({ user: publicAccount(session) })
+          : jsonResponse({ error: 'Authentication required' }, 401);
+      }
+
+      if (path === '/auth/logout' && request.method === 'POST') {
+        const token = getCookieValue(request, SESSION_COOKIE_NAME);
+        if (token && /^[a-f0-9]{64}$/i.test(token)) {
+          await env.DB.prepare('DELETE FROM dashboard_sessions WHERE token_hash = ?').bind(await sha256Hex(token)).run();
+        }
+        const response = jsonResponse({ success: true });
+        response.headers.set('Set-Cookie', getSessionCookie(request, '', 0));
+        return response;
+      }
+
+      return jsonResponse({ error: 'Not found' }, 404);
+    }
+
+    const protectedApiPrefixes = ['/users', '/jobs', '/logs', '/crashes', '/events', '/funnels', '/telemetry', '/settings', '/issues'];
+    const isProtectedApi = protectedApiPrefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+    const isPublicTelemetryIngest = request.method === 'POST' && ['/logs', '/crashes', '/events', '/telemetry/batch'].includes(path);
+    if (isProtectedApi && !isPublicTelemetryIngest) {
+      await ensureSchema(env.DB);
+      const session = await readDashboardSession(env.DB, request);
+      if (!session) return jsonResponse({ error: 'Authentication required' }, 401);
+      requestContext.auth = session;
+
+      const ownerOnlyPath = path.startsWith('/settings') ||
+        (request.method !== 'GET' && ['/users', '/jobs', '/funnels', '/issues'].some((prefix) => path === prefix || path.startsWith(`${prefix}/`)));
+      if (ownerOnlyPath && session.role !== 'owner') {
+        return jsonResponse({ error: 'Owner access required' }, 403);
+      }
+    }
+
     // Chỉ kiểm tra schema khi GHI. Chạy trên cả lượt đọc nghĩa là mỗi request
     // kéo theo hàng chục câu DDL, vừa chậm vừa tốn hạn mức.
     // /funnels là ngoại lệ: bảng cấu hình chỉ được tạo ở đây, và endpoint này
@@ -1719,12 +2059,19 @@ async function handleRequest(request, env, requestContext) {
         const platform = (url.searchParams.get('platform') || '').trim().toLowerCase();
 
         const dims = await loadDimensions(env.DB);
+        const tenantId = requestContext.auth?.role === 'owner' ? null : (requestContext.auth?.tenantId || 1);
+        const scopedJobs = tenantId === null
+          ? dims.jobs
+          : dims.jobs.filter((job) => Number(job.tenant_id || 1) === Number(tenantId));
+        const scopedUsers = tenantId === null
+          ? dims.users
+          : dims.users.filter((user) => Number(user.tenant_id || 1) === Number(tenantId));
 
         // Danh sách app lấy thẳng từ bảng jobs thực tế — không bịa dữ liệu
         const appsMap = new Map();
-        dims.jobs.forEach((job) => {
+        scopedJobs.forEach((job) => {
           if (!job.app_identifier) return;
-          const owner = dims.users.find((user) => String(user.id) === String(job.user_id));
+          const owner = scopedUsers.find((user) => String(user.id) === String(job.user_id));
           appsMap.set(job.app_identifier, {
             id: String(job.user_id || job.id || job.app_identifier),
             filterValue: String(job.user_id || job.app_identifier),
@@ -1735,16 +2082,15 @@ async function handleRequest(request, env, requestContext) {
           });
         });
 
+        const tenantClause = tenantId === null ? '' : 'WHERE tenant_id = ?';
+        const tenantParams = tenantId === null ? [] : [tenantId];
         const [recentLogs, recentEvents, recentCrashes] = await Promise.all([
-          env.DB.prepare(
-            'SELECT app_identifier, device_name, user_name FROM api_logs ORDER BY created_at DESC LIMIT ?'
-          ).bind(FILTER_SCAN_ROWS).all(),
-          env.DB.prepare(
-            'SELECT app_identifier, device_name, user_name, user_id, substr(device_info, 1, 200) AS device_info FROM app_events ORDER BY created_at DESC LIMIT ?'
-          ).bind(FILTER_SCAN_ROWS).all(),
-          env.DB.prepare(
-            'SELECT app_identifier, substr(device_info, 1, 200) AS device_info FROM app_crashes ORDER BY created_at DESC LIMIT ?'
-          ).bind(Math.floor(FILTER_SCAN_ROWS / 2)).all(),
+          env.DB.prepare(`SELECT app_identifier, device_name, user_name FROM api_logs ${tenantClause} ORDER BY created_at DESC LIMIT ?`)
+            .bind(...tenantParams, FILTER_SCAN_ROWS).all(),
+          env.DB.prepare(`SELECT app_identifier, device_name, user_name, user_id, substr(device_info, 1, 200) AS device_info FROM app_events ${tenantClause} ORDER BY created_at DESC LIMIT ?`)
+            .bind(...tenantParams, FILTER_SCAN_ROWS).all(),
+          env.DB.prepare(`SELECT app_identifier, substr(device_info, 1, 200) AS device_info FROM app_crashes ${tenantClause} ORDER BY created_at DESC LIMIT ?`)
+            .bind(...tenantParams, Math.floor(FILTER_SCAN_ROWS / 2)).all(),
         ]);
 
         const deviceSet = new Set();
@@ -1789,7 +2135,7 @@ async function handleRequest(request, env, requestContext) {
           }
         });
 
-        dims.users.forEach((user) => {
+        scopedUsers.forEach((user) => {
           if (user.name) userSet.add(String(user.name).trim());
         });
 
@@ -1821,15 +2167,20 @@ async function handleRequest(request, env, requestContext) {
     // ==========================================
     if (path === '/users' && request.method === 'GET') {
       try {
-        const { results } = await env.DB.prepare(`
+        const statement = env.DB.prepare(`
           SELECT 
             u.id, u.name, u.email, u.created_at,
+            u.tenant_id,
             j.id as job_id, j.name as job_name, j.type as job_type, 
             j.app_identifier, j.target_url, j.status as job_status, j.created_at as job_created_at
           FROM users u
           LEFT JOIN jobs j ON u.id = j.user_id
+          ${requestContext.auth?.role === 'owner' ? '' : 'WHERE u.tenant_id = ?'}
           ORDER BY u.created_at DESC
-        `).all();
+        `);
+        const { results } = requestContext.auth?.role === 'owner'
+          ? await statement.all()
+          : await statement.bind(requestContext.auth?.tenantId || 1).all();
         return jsonResponse(results);
       } catch (e) {
         return internalErrorResponse(e, requestContext);
@@ -1839,27 +2190,37 @@ async function handleRequest(request, env, requestContext) {
     if (path === '/users' && request.method === 'POST') {
       try {
         const body = await request.json();
-        const { name, email, job_name, job_type, app_identifier, target_url } = body;
+        const { name, email, job_name, job_type, app_identifier, target_url, password } = body;
 
-        if (!name || !email) {
-          return jsonResponse({ error: 'Name and email are required' }, 400);
+        if (!name || !email || !String(email).includes('@') || !isValidPassword(password)) {
+          return jsonResponse({ error: 'Name, a valid email, and a password of at least 12 characters are required.' }, 400);
         }
 
-        // Tạo user
+        const tenantInsert = await env.DB.prepare('INSERT INTO tenants (name) VALUES (?)')
+          .bind(name.trim().slice(0, 120)).run();
+        const tenantId = Number(tenantInsert.meta?.last_row_id || 1);
+
         const userInsert = await env.DB.prepare(
-          'INSERT INTO users (name, email) VALUES (?, ?)'
-        ).bind(name.trim(), email.trim()).run();
+          'INSERT INTO users (name, email, tenant_id) VALUES (?, ?, ?)'
+        ).bind(name.trim(), email.trim().toLowerCase(), tenantId).run();
 
         const userId = userInsert.meta?.last_row_id;
+
+        const passwordRecord = await hashDashboardPassword(password);
+        await env.DB.prepare(`
+          INSERT INTO dashboard_accounts (email, name, password_salt, password_hash, role, tenant_id, user_id)
+          VALUES (?, ?, ?, ?, 'tenant', ?, ?)
+        `).bind(email.trim().toLowerCase(), name.trim().slice(0, 120), passwordRecord.salt, passwordRecord.hash, tenantId, userId).run();
 
         // Nếu có khai báo thông tin Job (mỗi user theo dõi 1 app hoặc 1 web)
         if (userId && (job_name || app_identifier)) {
           const sanitizedIdentifier = (app_identifier || `${job_type || 'app'}_${Date.now()}`).trim().toLowerCase().replace(/\s+/g, '_');
           await env.DB.prepare(`
-            INSERT INTO jobs (user_id, name, type, app_identifier, target_url, status)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO jobs (user_id, tenant_id, name, type, app_identifier, target_url, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
           `).bind(
             userId,
+            tenantId,
             job_name || `${name}'s ${job_type === 'web' ? 'Web' : 'App'}`,
             job_type === 'web' ? 'web' : 'app',
             sanitizedIdentifier,
@@ -1869,7 +2230,7 @@ async function handleRequest(request, env, requestContext) {
         }
 
         invalidateDimensions();
-        return jsonResponse({ success: true, user_id: userId });
+        return jsonResponse({ success: true, user_id: userId, tenant_id: tenantId });
       } catch (e) {
         return internalErrorResponse(e, requestContext);
       }
@@ -1907,6 +2268,11 @@ async function handleRequest(request, env, requestContext) {
         `;
         const params = [];
 
+        if (requestContext.auth?.role !== 'owner') {
+          query += ' AND j.tenant_id = ?';
+          params.push(requestContext.auth?.tenantId || 1);
+        }
+
         if (userIdParam) {
           query += ' AND j.user_id = ?';
           params.push(Number(userIdParam));
@@ -1936,15 +2302,19 @@ async function handleRequest(request, env, requestContext) {
         }
 
         const sanitizedIdentifier = app_identifier.trim().toLowerCase().replace(/\s+/g, '_');
+        const owner = await env.DB.prepare('SELECT tenant_id FROM users WHERE id = ?').bind(user_id).first();
+        if (!owner) return jsonResponse({ error: 'User not found' }, 404);
+        const tenantId = Number(owner.tenant_id || 1);
 
         // Mỗi user theo dõi 1 app/web: Cập nhật hoặc thêm mới
         const existingJob = await env.DB.prepare('SELECT id FROM jobs WHERE user_id = ?').bind(user_id).first();
         if (existingJob) {
           await env.DB.prepare(`
             UPDATE jobs 
-            SET name = ?, type = ?, app_identifier = ?, target_url = ?, status = ?
+            SET tenant_id = ?, name = ?, type = ?, app_identifier = ?, target_url = ?, status = ?
             WHERE user_id = ?
           `).bind(
+            tenantId,
             name.trim(),
             type === 'web' ? 'web' : 'app',
             sanitizedIdentifier,
@@ -1954,10 +2324,11 @@ async function handleRequest(request, env, requestContext) {
           ).run();
         } else {
           await env.DB.prepare(`
-            INSERT INTO jobs (user_id, name, type, app_identifier, target_url, status)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO jobs (user_id, tenant_id, name, type, app_identifier, target_url, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
           `).bind(
             user_id,
+            tenantId,
             name.trim(),
             type === 'web' ? 'web' : 'app',
             sanitizedIdentifier,
@@ -2013,7 +2384,13 @@ async function handleRequest(request, env, requestContext) {
         `;
         const params = [];
 
+        if (requestContext.auth?.role !== 'owner') {
+          query += ' AND tenant_id = ?';
+          params.push(requestContext.auth?.tenantId || 1);
+        }
+
         const scope = buildScopeClause(dims, {
+          tenantId: requestContext.auth?.role === 'owner' ? null : requestContext.auth?.tenantId,
           userId: url.searchParams.get('user_id'),
           jobId: url.searchParams.get('job_id'),
           appIdentifier: url.searchParams.get('app_identifier') || url.searchParams.get('app_id'),
@@ -2127,20 +2504,10 @@ async function handleRequest(request, env, requestContext) {
           else effectiveDeviceName = 'Thiết bị di động';
         }
 
-        const effectiveAppIdentifier = (app_identifier || app_id || '').trim();
-        let effectiveJobId = job_id ? Number(job_id) : null;
-
-        // Nếu chưa có job_id nhưng có app_identifier, tìm kiếm job_id tương ứng
-        if (!effectiveJobId && effectiveAppIdentifier) {
-          try {
-            const matchedJob = await env.DB.prepare(
-              'SELECT id FROM jobs WHERE app_identifier = ?'
-            ).bind(effectiveAppIdentifier).first();
-            if (matchedJob) {
-              effectiveJobId = matchedJob.id;
-            }
-          } catch (_) {}
-        }
+        const ingestScope = await resolveIngestScope(env.DB, (app_identifier || app_id || '').trim(), job_id);
+        const effectiveAppIdentifier = ingestScope.appIdentifier;
+        const effectiveJobId = ingestScope.jobId;
+        const effectiveTenantId = ingestScope.tenantId;
 
         let logIssueId = null;
         let logFingerprint = null;
@@ -2157,9 +2524,10 @@ async function handleRequest(request, env, requestContext) {
               : String(normalizedStatusCode);
           const title = `${(method || 'GET').toUpperCase()} ${endpoint} (${issueReason})`;
           const culprit = error_message ? String(error_message).slice(0, 200) : normalizedErrorCode || endpoint;
-          logFingerprint = await generateIssueFingerprint('api_error', effectiveAppIdentifier, title, culprit);
+          logFingerprint = await generateIssueFingerprint('api_error', effectiveAppIdentifier, title, culprit, effectiveTenantId);
           const issue = await upsertIssueRecord(env.DB, {
             fingerprint: logFingerprint,
+            tenantId: effectiveTenantId,
             jobId: effectiveJobId,
             appIdentifier: effectiveAppIdentifier,
             type: 'api_error',
@@ -2203,12 +2571,13 @@ async function handleRequest(request, env, requestContext) {
         try {
           await env.DB.prepare(`
             INSERT INTO api_logs (
-              job_id, app_identifier, endpoint, method, status_code, 
+              tenant_id, job_id, app_identifier, endpoint, method, status_code,
               error_message, request_payload, response_payload, duration_ms,
               device_name, user_name, ip_address, issue_id, fingerprint,
               error_type, error_code, stack_trace, request_id, server_request_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).bind(
+            effectiveTenantId,
             effectiveJobId,
             effectiveAppIdentifier || null,
             endpoint || '',
@@ -2233,12 +2602,13 @@ async function handleRequest(request, env, requestContext) {
           // Fallback nếu cột mới chưa cập nhật
           await env.DB.prepare(`
             INSERT INTO api_logs (
-              job_id, app_identifier, endpoint, method, status_code, 
+              tenant_id, job_id, app_identifier, endpoint, method, status_code,
               error_message, request_payload, response_payload, duration_ms,
               device_name, user_name, ip_address,
               error_type, error_code, stack_trace, request_id, server_request_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).bind(
+            effectiveTenantId,
             effectiveJobId,
             effectiveAppIdentifier || null,
             endpoint || '',
@@ -2288,7 +2658,13 @@ async function handleRequest(request, env, requestContext) {
         `;
         const params = [];
 
+        if (requestContext.auth?.role !== 'owner') {
+          query += ' AND tenant_id = ?';
+          params.push(requestContext.auth?.tenantId || 1);
+        }
+
         const scope = buildScopeClause(dims, {
+          tenantId: requestContext.auth?.role === 'owner' ? null : requestContext.auth?.tenantId,
           userId: url.searchParams.get('user_id'),
           jobId: url.searchParams.get('job_id'),
           appIdentifier: url.searchParams.get('app_identifier') || url.searchParams.get('app_id'),
@@ -2347,19 +2723,10 @@ async function handleRequest(request, env, requestContext) {
           return jsonResponse({ error: 'error_message is required' }, 400);
         }
 
-        const effectiveAppIdentifier = (app_identifier || app_id || '').trim();
-        let effectiveJobId = job_id ? Number(job_id) : null;
-
-        if (!effectiveJobId && effectiveAppIdentifier) {
-          try {
-            const matchedJob = await env.DB.prepare(
-              'SELECT id FROM jobs WHERE app_identifier = ?'
-            ).bind(effectiveAppIdentifier).first();
-            if (matchedJob) {
-              effectiveJobId = matchedJob.id;
-            }
-          } catch (_) {}
-        }
+        const ingestScope = await resolveIngestScope(env.DB, (app_identifier || app_id || '').trim(), job_id);
+        const effectiveAppIdentifier = ingestScope.appIdentifier;
+        const effectiveJobId = ingestScope.jobId;
+        const effectiveTenantId = ingestScope.tenantId;
 
         // Nhận diện nền tảng hệ điều hành (Android vs iOS) chính xác
         const detectedPlatform = detectCrashPlatform(body, request);
@@ -2403,9 +2770,10 @@ async function handleRequest(request, env, requestContext) {
           crashCulprit = lines.find((l) => l.includes('.dart') || l.includes('.js') || l.includes('.ts') || l.includes(':')) || lines[0] || null;
         }
 
-        const crashFingerprint = await generateIssueFingerprint('crash', effectiveAppIdentifier, crashTitle, crashCulprit);
+        const crashFingerprint = await generateIssueFingerprint('crash', effectiveAppIdentifier, crashTitle, crashCulprit, effectiveTenantId);
         const crashIssue = await upsertIssueRecord(env.DB, {
           fingerprint: crashFingerprint,
+          tenantId: effectiveTenantId,
           jobId: effectiveJobId,
           appIdentifier: effectiveAppIdentifier,
           type: 'crash',
@@ -2420,10 +2788,11 @@ async function handleRequest(request, env, requestContext) {
         try {
           res = await env.DB.prepare(`
             INSERT INTO app_crashes (
-              job_id, app_identifier, error_message, stack_trace,
+              tenant_id, job_id, app_identifier, error_message, stack_trace,
               is_fatal, device_info, custom_attributes, issue_id, fingerprint
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).bind(
+            effectiveTenantId,
             effectiveJobId,
             effectiveAppIdentifier || null,
             String(error_message),
@@ -2437,10 +2806,11 @@ async function handleRequest(request, env, requestContext) {
         } catch (insertErr) {
           res = await env.DB.prepare(`
             INSERT INTO app_crashes (
-              job_id, app_identifier, error_message, stack_trace,
+              tenant_id, job_id, app_identifier, error_message, stack_trace,
               is_fatal, device_info, custom_attributes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
           `).bind(
+            effectiveTenantId,
             effectiveJobId,
             effectiveAppIdentifier || null,
             String(error_message),
@@ -2506,7 +2876,13 @@ async function handleRequest(request, env, requestContext) {
         `;
         const params = [];
 
+        if (requestContext.auth?.role !== 'owner') {
+          query += ' AND tenant_id = ?';
+          params.push(requestContext.auth?.tenantId || 1);
+        }
+
         const scope = buildScopeClause(dims, {
+          tenantId: requestContext.auth?.role === 'owner' ? null : requestContext.auth?.tenantId,
           userId: url.searchParams.get('user_id'),
           jobId: url.searchParams.get('job_id'),
           appIdentifier: url.searchParams.get('app_identifier') || url.searchParams.get('app_id'),
@@ -2576,7 +2952,10 @@ async function handleRequest(request, env, requestContext) {
           return jsonResponse({ error: 'Cần tham số type (log|crash|event) và id' }, 400);
         }
 
-        const row = await env.DB.prepare(`SELECT * FROM ${table} WHERE id = ?`).bind(id).first();
+        const row = requestContext.auth?.role === 'owner'
+          ? await env.DB.prepare(`SELECT * FROM ${table} WHERE id = ?`).bind(id).first()
+          : await env.DB.prepare(`SELECT * FROM ${table} WHERE id = ? AND tenant_id = ?`)
+            .bind(id, requestContext.auth?.tenantId || 1).first();
         if (!row) return jsonResponse({ error: 'Không tìm thấy bản ghi' }, 404);
 
         const dims = await loadDimensions(env.DB);
@@ -2607,19 +2986,10 @@ async function handleRequest(request, env, requestContext) {
           return jsonResponse({ error: 'event_name is required' }, 400);
         }
 
-        const effectiveAppIdentifier = (app_identifier || app_id || '').trim();
-        let effectiveJobId = job_id ? Number(job_id) : null;
-
-        if (!effectiveJobId && effectiveAppIdentifier) {
-          try {
-            const matchedJob = await env.DB.prepare(
-              'SELECT id FROM jobs WHERE app_identifier = ?'
-            ).bind(effectiveAppIdentifier).first();
-            if (matchedJob) {
-              effectiveJobId = matchedJob.id;
-            }
-          } catch (_) {}
-        }
+        const ingestScope = await resolveIngestScope(env.DB, (app_identifier || app_id || '').trim(), job_id);
+        const effectiveAppIdentifier = ingestScope.appIdentifier;
+        const effectiveJobId = ingestScope.jobId;
+        const effectiveTenantId = ingestScope.tenantId;
 
         // App gửi kèm user_name / device_name từ lâu nhưng trước đây bị bỏ qua,
         // nên không cắt lát thống kê theo người dùng hay thiết bị được.
@@ -2638,6 +3008,7 @@ async function handleRequest(request, env, requestContext) {
         }
 
         const insertValues = [
+          effectiveTenantId,
           effectiveJobId,
           effectiveAppIdentifier || null,
           String(event_name).trim(),
@@ -2652,10 +3023,10 @@ async function handleRequest(request, env, requestContext) {
         try {
           res = await env.DB.prepare(`
             INSERT INTO app_events (
-              job_id, app_identifier, event_name, event_type,
+              tenant_id, job_id, app_identifier, event_name, event_type,
               screen_name, user_id, parameters, device_info,
               user_name, device_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).bind(
             ...insertValues,
             effectiveUserName || null,
@@ -2665,9 +3036,9 @@ async function handleRequest(request, env, requestContext) {
           // Dự phòng cho DB chưa kịp chạy ALTER thêm hai cột mới
           res = await env.DB.prepare(`
             INSERT INTO app_events (
-              job_id, app_identifier, event_name, event_type,
+              tenant_id, job_id, app_identifier, event_name, event_type,
               screen_name, user_id, parameters, device_info
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).bind(...insertValues).run();
         }
 
@@ -2683,13 +3054,18 @@ async function handleRequest(request, env, requestContext) {
       try {
         const platform = (url.searchParams.get('platform') || '').trim().toLowerCase();
         let query = 'SELECT * FROM event_funnels WHERE 1=1';
+        const params = [];
+        if (requestContext.auth?.role !== 'owner') {
+          query += ' AND tenant_id = ?';
+          params.push(requestContext.auth?.tenantId || 1);
+        }
         if (platform === 'web') {
           query += " AND (app_identifier LIKE '%web%' OR app_identifier = 'vn.myportal.web')";
         } else if (platform === 'app') {
           query += " AND (app_identifier NOT LIKE '%web%' AND (app_identifier != 'vn.myportal.web' OR app_identifier IS NULL))";
         }
         query += ' ORDER BY status ASC, name ASC';
-        const { results } = await env.DB.prepare(query).all();
+        const { results } = await env.DB.prepare(query).bind(...params).all();
         return jsonResponse((results || []).map(mapFunnelRow));
       } catch (e) {
         return internalErrorResponse(e, requestContext);
@@ -2714,11 +3090,14 @@ async function handleRequest(request, env, requestContext) {
         }
 
         const appIdentifier = String(body.app_identifier || '').trim() || null;
+        const funnelTenantId = appIdentifier
+          ? (await resolveIngestScope(env.DB, appIdentifier)).tenantId
+          : 1;
 
         // Không khai báo config thì tự dò từ tên sự kiện có thật trong DB
         let config = body.config ? normalizeFunnelConfig(body.config) : null;
         if (!config || !config.start_event) {
-          const names = (await listDistinctEventNames(env.DB, appIdentifier)).map(
+          const names = (await listDistinctEventNames(env.DB, appIdentifier, funnelTenantId)).map(
             (row) => row.event_name
           );
           const derived = deriveFunnelConfig(eventPrefix, names);
@@ -2729,14 +3108,15 @@ async function handleRequest(request, env, requestContext) {
             env.DB,
             config.complete_event,
             config.outcome_param,
-            appIdentifier
+            appIdentifier,
+            funnelTenantId
           );
         }
 
         await env.DB.prepare(
           `
-          INSERT INTO event_funnels (funnel_key, name, app_identifier, event_prefix, config, status)
-          VALUES (?, ?, ?, ?, ?, ?)
+          INSERT INTO event_funnels (funnel_key, tenant_id, name, app_identifier, event_prefix, config, status)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(funnel_key) DO UPDATE SET
             name = excluded.name,
             app_identifier = excluded.app_identifier,
@@ -2747,6 +3127,7 @@ async function handleRequest(request, env, requestContext) {
         )
           .bind(
             funnelKey,
+            funnelTenantId,
             name,
             appIdentifier,
             eventPrefix || null,
@@ -2755,7 +3136,7 @@ async function handleRequest(request, env, requestContext) {
           )
           .run();
 
-        const saved = await loadFunnel(env.DB, funnelKey);
+        const saved = await loadFunnel(env.DB, funnelKey, funnelTenantId);
         return jsonResponse({ success: true, funnel: saved });
       } catch (e) {
         return internalErrorResponse(e, requestContext);
@@ -2785,7 +3166,8 @@ async function handleRequest(request, env, requestContext) {
       try {
         const appIdentifier =
           url.searchParams.get('app_identifier') || url.searchParams.get('app_id');
-        const events = await listDistinctEventNames(env.DB, appIdentifier);
+        const tenantId = requestContext.auth?.role === 'owner' ? null : (requestContext.auth?.tenantId || 1);
+        const events = await listDistinctEventNames(env.DB, appIdentifier, tenantId);
 
         // Gợi ý tiền tố: cụm đầu tiên trước dấu "_" của các sự kiện cùng họ
         const prefixCounts = new Map();
@@ -2814,7 +3196,8 @@ async function handleRequest(request, env, requestContext) {
     if (path === '/events/stats' && request.method === 'GET') {
       try {
         const funnelKey = url.searchParams.get('funnel') || DEFAULT_STATS_FUNNEL_KEY;
-        const funnel = await loadFunnel(env.DB, funnelKey);
+        const tenantId = requestContext.auth?.role === 'owner' ? null : (requestContext.auth?.tenantId || 1);
+        const funnel = await loadFunnel(env.DB, funnelKey, tenantId);
         if (!funnel) {
           return jsonResponse({ error: `Không tìm thấy funnel "${funnelKey}"` }, 404);
         }
@@ -2849,11 +3232,11 @@ async function handleRequest(request, env, requestContext) {
               SELECT day, attempts, outcome_auto, outcome_manual,
                      outcome_failed, outcome_abandoned, outcome_open
               FROM event_funnel_daily
-              WHERE funnel_key = ? AND app_identifier = ? AND day >= ? AND day <= ?
+              WHERE funnel_key = ? AND app_identifier = ? AND tenant_id = ? AND day >= ? AND day <= ?
               ORDER BY day ASC
               `
             )
-              .bind(funnel.funnel_key, appIdentifier || funnel.app_identifier || '', dayFrom, dayTo)
+              .bind(funnel.funnel_key, appIdentifier || funnel.app_identifier || '', Number(funnel.tenant_id || 1), dayFrom, dayTo)
               .all();
 
             const merged = new Map();
@@ -2894,28 +3277,35 @@ async function handleRequest(request, env, requestContext) {
         await ensureApiLogDiagnosticColumns(env.DB);
         const platform = (url.searchParams.get('platform') || '').trim().toLowerCase();
         const appIdentifier = url.searchParams.get('app_identifier') || url.searchParams.get('app_id') || null;
-        let appFilterLogs = '';
-        let appFilterCrashes = '';
-        let appFilterEvents = '';
+        const tenantId = requestContext.auth?.role === 'owner' ? null : (requestContext.auth?.tenantId || 1);
+        let appFilterLogs = tenantId === null ? '' : ' AND tenant_id = ?';
+        let appFilterCrashes = tenantId === null ? '' : ' AND tenant_id = ?';
+        let appFilterEvents = tenantId === null ? '' : ' AND tenant_id = ?';
         const paramsLogs = [];
         const paramsCrashes = [];
         const paramsEvents = [];
 
+        if (tenantId !== null) {
+          paramsLogs.push(tenantId);
+          paramsCrashes.push(tenantId);
+          paramsEvents.push(tenantId);
+        }
+
         if (appIdentifier) {
-          appFilterLogs = ' AND app_identifier = ?';
-          appFilterCrashes = ' AND app_identifier = ?';
-          appFilterEvents = ' AND app_identifier = ?';
+          appFilterLogs += ' AND app_identifier = ?';
+          appFilterCrashes += ' AND app_identifier = ?';
+          appFilterEvents += ' AND app_identifier = ?';
           paramsLogs.push(appIdentifier);
           paramsCrashes.push(appIdentifier);
           paramsEvents.push(appIdentifier);
         } else if (platform === 'web') {
-          appFilterLogs = " AND (app_identifier LIKE '%web%' OR app_identifier = 'vn.myportal.web' OR device_name LIKE '%Web%' OR device_name LIKE '%Chrome%' OR device_name LIKE '%Safari%' OR device_name LIKE '%Firefox%' OR device_name LIKE '%Edge%')";
-          appFilterCrashes = " AND (app_identifier LIKE '%web%' OR app_identifier = 'vn.myportal.web')";
-          appFilterEvents = " AND (app_identifier LIKE '%web%' OR app_identifier = 'vn.myportal.web')";
+          appFilterLogs += " AND (app_identifier LIKE '%web%' OR app_identifier = 'vn.myportal.web' OR device_name LIKE '%Web%' OR device_name LIKE '%Chrome%' OR device_name LIKE '%Safari%' OR device_name LIKE '%Firefox%' OR device_name LIKE '%Edge%')";
+          appFilterCrashes += " AND (app_identifier LIKE '%web%' OR app_identifier = 'vn.myportal.web')";
+          appFilterEvents += " AND (app_identifier LIKE '%web%' OR app_identifier = 'vn.myportal.web')";
         } else if (platform === 'app') {
-          appFilterLogs = " AND (app_identifier NOT LIKE '%web%' AND (app_identifier != 'vn.myportal.web' OR app_identifier IS NULL)) AND (device_name IS NULL OR (device_name NOT LIKE '%Chrome%' AND device_name NOT LIKE '%Firefox%' AND device_name NOT LIKE '%Safari%' AND device_name NOT LIKE '%Edge%' AND device_name NOT LIKE '%Web Browser%'))";
-          appFilterCrashes = " AND (app_identifier NOT LIKE '%web%' AND (app_identifier != 'vn.myportal.web' OR app_identifier IS NULL))";
-          appFilterEvents = " AND (app_identifier NOT LIKE '%web%' AND (app_identifier != 'vn.myportal.web' OR app_identifier IS NULL))";
+          appFilterLogs += " AND (app_identifier NOT LIKE '%web%' AND (app_identifier != 'vn.myportal.web' OR app_identifier IS NULL)) AND (device_name IS NULL OR (device_name NOT LIKE '%Chrome%' AND device_name NOT LIKE '%Firefox%' AND device_name NOT LIKE '%Safari%' AND device_name NOT LIKE '%Edge%' AND device_name NOT LIKE '%Web Browser%'))";
+          appFilterCrashes += " AND (app_identifier NOT LIKE '%web%' AND (app_identifier != 'vn.myportal.web' OR app_identifier IS NULL))";
+          appFilterEvents += " AND (app_identifier NOT LIKE '%web%' AND (app_identifier != 'vn.myportal.web' OR app_identifier IS NULL))";
         }
 
         const [logStats, crashStats, eventStats] = await Promise.all([
@@ -2976,12 +3366,13 @@ async function handleRequest(request, env, requestContext) {
           return jsonResponse({ items: [], message: 'Cần chọn ít nhất Người dùng, Thiết bị hoặc App' });
         }
 
-        let logWhere = 'WHERE 1=1';
-        const logParams = [];
-        let crashWhere = 'WHERE 1=1';
-        const crashParams = [];
-        let eventWhere = 'WHERE 1=1';
-        const eventParams = [];
+        const tenantId = requestContext.auth?.role === 'owner' ? null : (requestContext.auth?.tenantId || 1);
+        let logWhere = tenantId === null ? 'WHERE 1=1' : 'WHERE tenant_id = ?';
+        const logParams = tenantId === null ? [] : [tenantId];
+        let crashWhere = tenantId === null ? 'WHERE 1=1' : 'WHERE tenant_id = ?';
+        const crashParams = tenantId === null ? [] : [tenantId];
+        let eventWhere = tenantId === null ? 'WHERE 1=1' : 'WHERE tenant_id = ?';
+        const eventParams = tenantId === null ? [] : [tenantId];
 
         if (appIdentifier) {
           logWhere += ' AND app_identifier = ?';
@@ -3218,14 +3609,10 @@ async function handleRequest(request, env, requestContext) {
           events = [],
         } = body;
 
-        const effectiveApp = (app_identifier || app_id || '').trim();
-        let effectiveJobId = null;
-        if (effectiveApp) {
-          try {
-            const matchedJob = await env.DB.prepare('SELECT id FROM jobs WHERE app_identifier = ?').bind(effectiveApp).first();
-            if (matchedJob) effectiveJobId = matchedJob.id;
-          } catch (_) {}
-        }
+        const ingestScope = await resolveIngestScope(env.DB, (app_identifier || app_id || '').trim());
+        const effectiveApp = ingestScope.appIdentifier;
+        const effectiveJobId = ingestScope.jobId;
+        const effectiveTenantId = ingestScope.tenantId;
 
         const clientIp = (
           request.headers.get('cf-connecting-ip') ||
@@ -3239,7 +3626,7 @@ async function handleRequest(request, env, requestContext) {
         // 1. Logs
         let batchApi500AlertTriggered = false;
         for (const log of logs) {
-          const lApp = (log.app_identifier || log.app_id || effectiveApp).trim();
+          const lApp = effectiveApp;
           const lDevice = (log.device_name || device_name || '').trim();
           const lUser = (log.user_name || user_name || '').trim();
           const lStatusCode = log.status_code === undefined || log.status_code === null
@@ -3259,9 +3646,10 @@ async function handleRequest(request, env, requestContext) {
               : lErrorType === 'network_error' ? 'Network Error' : String(lStatusCode);
             const lTitle = `${(log.method || 'GET').toUpperCase()} ${log.endpoint} (${issueReason})`;
             const lCulprit = log.error_message ? String(log.error_message).slice(0, 200) : lErrorCode || log.endpoint;
-            lFingerprint = await generateIssueFingerprint('api_error', lApp, lTitle, lCulprit);
+            lFingerprint = await generateIssueFingerprint('api_error', lApp, lTitle, lCulprit, effectiveTenantId);
             const lIssue = await upsertIssueRecord(env.DB, {
               fingerprint: lFingerprint,
+              tenantId: effectiveTenantId,
               jobId: effectiveJobId,
               appIdentifier: lApp,
               type: 'api_error',
@@ -3306,12 +3694,13 @@ async function handleRequest(request, env, requestContext) {
           statements.push(
             env.DB.prepare(`
               INSERT INTO api_logs (
-              job_id, app_identifier, endpoint, method, status_code, 
+              tenant_id, job_id, app_identifier, endpoint, method, status_code,
               error_message, request_payload, response_payload, duration_ms,
               device_name, user_name, ip_address, issue_id, fingerprint,
               error_type, error_code, stack_trace, request_id, server_request_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).bind(
+              effectiveTenantId,
               effectiveJobId,
               lApp || null,
               log.endpoint || '',
@@ -3338,7 +3727,7 @@ async function handleRequest(request, env, requestContext) {
         // 2. Crashes
         let batchCrashAlertTriggered = false;
         for (const crash of crashes) {
-          const cApp = (crash.app_identifier || crash.app_id || effectiveApp).trim();
+          const cApp = effectiveApp;
           const isFatal = crash.is_fatal ? 1 : 0;
           const cTitle = String(crash.error_message || 'Unknown Crash').split('\n')[0].slice(0, 200);
           let cCulprit = null;
@@ -3386,9 +3775,10 @@ async function handleRequest(request, env, requestContext) {
             };
           }
 
-          const cFingerprint = await generateIssueFingerprint('crash', cApp, cTitle, cCulprit);
+          const cFingerprint = await generateIssueFingerprint('crash', cApp, cTitle, cCulprit, effectiveTenantId);
           const cIssue = await upsertIssueRecord(env.DB, {
             fingerprint: cFingerprint,
+            tenantId: effectiveTenantId,
             jobId: effectiveJobId,
             appIdentifier: cApp,
             type: 'crash',
@@ -3401,10 +3791,11 @@ async function handleRequest(request, env, requestContext) {
           statements.push(
             env.DB.prepare(`
               INSERT INTO app_crashes (
-                job_id, app_identifier, error_message, stack_trace,
+                tenant_id, job_id, app_identifier, error_message, stack_trace,
                 is_fatal, device_info, custom_attributes, issue_id, fingerprint
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).bind(
+              effectiveTenantId,
               effectiveJobId,
               cApp || null,
               String(crash.error_message || 'Unknown Crash'),
@@ -3437,15 +3828,16 @@ async function handleRequest(request, env, requestContext) {
 
         // 3. Events
         for (const ev of events) {
-          const eApp = (ev.app_identifier || ev.app_id || effectiveApp).trim();
+          const eApp = effectiveApp;
           statements.push(
             env.DB.prepare(`
               INSERT INTO app_events (
-                job_id, app_identifier, event_name, event_type,
+                tenant_id, job_id, app_identifier, event_name, event_type,
                 screen_name, user_id, parameters, device_info,
                 user_name, device_name
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).bind(
+              effectiveTenantId,
               effectiveJobId,
               eApp || null,
               String(ev.event_name || 'event').trim(),
@@ -3492,8 +3884,9 @@ async function handleRequest(request, env, requestContext) {
         const limit = Math.min(Math.max(Number(urlParams.get('limit')) || 50, 1), 100);
         const offset = Math.max(Number(urlParams.get('offset')) || 0, 0);
 
-        let whereClause = 'WHERE 1=1';
-        const params = [];
+        const tenantId = requestContext.auth?.role === 'owner' ? null : (requestContext.auth?.tenantId || 1);
+        let whereClause = tenantId === null ? 'WHERE 1=1' : 'WHERE tenant_id = ?';
+        const params = tenantId === null ? [] : [tenantId];
 
         if (status && status !== 'all') {
           whereClause += ' AND status = ?';
@@ -3532,8 +3925,8 @@ async function handleRequest(request, env, requestContext) {
         const { results: issuesList } = await env.DB.prepare(listQuery).bind(...params, limit, offset).all();
 
         // Thống kê số lượng theo từng trạng thái để phục vụ Tabs trên UI
-        let countFilter = 'WHERE 1=1';
-        const countParams = [];
+        let countFilter = tenantId === null ? 'WHERE 1=1' : 'WHERE tenant_id = ?';
+        const countParams = tenantId === null ? [] : [tenantId];
         if (appIdentifier) {
           countFilter += ' AND app_identifier = ?';
           countParams.push(appIdentifier);
@@ -3592,7 +3985,10 @@ async function handleRequest(request, env, requestContext) {
     if (issueDetailMatch && request.method === 'GET') {
       try {
         const issueId = Number(issueDetailMatch[1]);
-        const issue = await env.DB.prepare('SELECT * FROM issues WHERE id = ?').bind(issueId).first();
+        const issue = requestContext.auth?.role === 'owner'
+          ? await env.DB.prepare('SELECT * FROM issues WHERE id = ?').bind(issueId).first()
+          : await env.DB.prepare('SELECT * FROM issues WHERE id = ? AND tenant_id = ?')
+            .bind(issueId, requestContext.auth?.tenantId || 1).first();
         if (!issue) {
           return jsonResponse({ error: 'Không tìm thấy Issue' }, 404);
         }
@@ -3614,9 +4010,9 @@ async function handleRequest(request, env, requestContext) {
             SELECT id, app_identifier, error_message, stack_trace, is_fatal, device_info, custom_attributes, created_at,
                    COALESCE(device_name, '') as device_name
             FROM app_crashes
-            WHERE issue_id = ? OR fingerprint = ?
+            WHERE (issue_id = ? OR fingerprint = ?) AND tenant_id = ?
             ORDER BY id DESC LIMIT 20
-          `).bind(issueId, issue.fingerprint).all();
+          `).bind(issueId, issue.fingerprint, Number(issue.tenant_id || 1)).all();
           recentEvents = results || [];
 
           // Tìm các request của user/device hoặc app ngay trước khi xảy ra crash (Breadcrumbs trail)
@@ -3639,9 +4035,9 @@ async function handleRequest(request, env, requestContext) {
             let bcQuery = `
               SELECT id, app_identifier, endpoint, method, status_code, duration_ms, error_message, error_type, error_code, stack_trace, request_id, server_request_id, request_payload, response_payload, device_name, user_name, ip_address, created_at
               FROM api_logs
-              WHERE app_identifier = ?
+              WHERE app_identifier = ? AND tenant_id = ?
             `;
-            const bcParams = [issue.app_identifier];
+            const bcParams = [issue.app_identifier, Number(issue.tenant_id || 1)];
 
             if (crashUser) {
               bcQuery += ` AND user_name = ?`;
@@ -3668,9 +4064,9 @@ async function handleRequest(request, env, requestContext) {
           const { results } = await env.DB.prepare(`
             SELECT id, app_identifier, endpoint, method, status_code, error_message, error_type, error_code, stack_trace, request_id, server_request_id, request_payload, response_payload, duration_ms, device_name, user_name, ip_address, created_at
             FROM api_logs
-            WHERE issue_id = ? OR fingerprint = ?
+            WHERE (issue_id = ? OR fingerprint = ?) AND tenant_id = ?
             ORDER BY id DESC LIMIT 20
-          `).bind(issueId, issue.fingerprint).all();
+          `).bind(issueId, issue.fingerprint, Number(issue.tenant_id || 1)).all();
           recentEvents = results || [];
 
           // Tìm breadcrumbs cho lần nổ lỗi mới nhất
@@ -3679,9 +4075,9 @@ async function handleRequest(request, env, requestContext) {
             let bcQuery = `
               SELECT id, app_identifier, endpoint, method, status_code, duration_ms, error_message, error_type, error_code, stack_trace, request_id, server_request_id, request_payload, response_payload, device_name, user_name, ip_address, created_at
               FROM api_logs
-              WHERE app_identifier = ?
+              WHERE app_identifier = ? AND tenant_id = ?
             `;
-            const bcParams = [issue.app_identifier];
+            const bcParams = [issue.app_identifier, Number(issue.tenant_id || 1)];
 
             if (latestApiErr.user_name) {
               bcQuery += ` AND user_name = ?`;
@@ -3711,10 +4107,10 @@ async function handleRequest(request, env, requestContext) {
             const { results: fallbackBc } = await env.DB.prepare(`
               SELECT id, app_identifier, endpoint, method, status_code, duration_ms, error_message, error_type, error_code, stack_trace, request_id, server_request_id, request_payload, response_payload, device_name, user_name, ip_address, created_at
               FROM api_logs
-              WHERE app_identifier = ?
+              WHERE app_identifier = ? AND tenant_id = ?
               ORDER BY created_at DESC, id DESC
               LIMIT 6
-            `).bind(issue.app_identifier).all();
+            `).bind(issue.app_identifier, Number(issue.tenant_id || 1)).all();
             breadcrumbs = (fallbackBc || []).reverse();
           } catch (_) {}
         }

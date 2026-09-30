@@ -2,7 +2,7 @@ import React, { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import AdminLayout from './layouts/AdminLayout';
 import { PlatformProvider } from './context/PlatformContext';
-import { AuthProvider, ProtectedRoute } from './context/AuthContext';
+import { AuthProvider, ProtectedRoute, OwnerRoute } from './context/AuthContext';
 import PlatformSelectionModal from './components/dashboard/PlatformSelectionModal';
 import PageLoading from './components/ui/PageLoading';
 
@@ -37,7 +37,7 @@ function App() {
               >
                 <Route path="dashboard" element={<LegacyDashboardRedirect />} />
                 <Route path="monitor/:mode" element={<Dashboard />} />
-                <Route path="users" element={<UserManager />} />
+                <Route path="users" element={<OwnerRoute><UserManager /></OwnerRoute>} />
                 <Route path="setup" element={<Setup />} />
               </Route>
 

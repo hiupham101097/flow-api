@@ -81,15 +81,17 @@ export default function AdminLayout() {
             {!isCollapsed && <span className="side-link-name">Giám sát</span>}
             {isCollapsed && <span className="side-tooltip">Giám sát</span>}
           </NavLink>
-          <NavLink
-            to="/admin/users"
-            className={({ isActive }) => `side-link ${isActive ? 'active' : ''}`}
-            title={isCollapsed ? "Người dùng" : undefined}
-          >
-            <span className="side-link-icon"><UsersIcon /></span>
-            {!isCollapsed && <span className="side-link-name">Người dùng</span>}
-            {isCollapsed && <span className="side-tooltip">Người dùng</span>}
-          </NavLink>
+          {user?.role === 'owner' && (
+            <NavLink
+              to="/admin/users"
+              className={({ isActive }) => `side-link ${isActive ? 'active' : ''}`}
+              title={isCollapsed ? "Người dùng" : undefined}
+            >
+              <span className="side-link-icon"><UsersIcon /></span>
+              {!isCollapsed && <span className="side-link-name">Người dùng</span>}
+              {isCollapsed && <span className="side-tooltip">Người dùng</span>}
+            </NavLink>
+          )}
           <NavLink
             to="/admin/setup"
             className={({ isActive }) => `side-link ${isActive ? 'active' : ''}`}
@@ -156,10 +158,10 @@ export default function AdminLayout() {
           <div className="topbar-actions">
             {user && (
               <div className="account-chip">
-                <span className="account-platform-mark" aria-hidden="true">{user.role === 'web' ? 'W' : 'A'}</span>
+                <span className="account-platform-mark" aria-hidden="true">{user.role === 'owner' ? 'O' : 'T'}</span>
                 <div className="account-copy">
-                  <strong>{user.username}</strong>
-                  <span className={`account-role account-role-${user.role}`}>{user.role === 'web' ? 'Web Role' : 'App Role'}</span>
+                  <strong>{user.name || user.email}</strong>
+                  <span className={`account-role account-role-${user.role}`}>{user.role === 'owner' ? 'Chủ hệ thống' : `Tenant ${user.tenant_id}`}</span>
                 </div>
                 <button type="button" onClick={logout} className="logout-btn" title="Đăng xuất khỏi hệ thống">
                   <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ marginRight: '0.2rem' }}>
