@@ -777,17 +777,20 @@ input:focus-visible {
   background: var(--surface);
 }
 
-.log-toolbar {
+.log-toolbar,
+.log-panel-header {
   display: flex;
+  flex-wrap: wrap;
   min-height: 76px;
   align-items: center;
   justify-content: space-between;
-  gap: 1.5rem;
+  gap: 1rem 1.25rem;
   padding: 1rem 1.25rem;
   border-bottom: 1px solid var(--line);
 }
 
 .log-title-group {
+  flex: 1 1 240px;
   min-width: 0;
   gap: 0.65rem;
 }
@@ -802,6 +805,10 @@ input:focus-visible {
 }
 
 .log-controls {
+  flex: 2 1 720px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
   gap: 0.65rem;
 }
 
@@ -1439,13 +1446,16 @@ tbody tr.row-error:hover {
     border-left: 0;
   }
 
-  .log-toolbar {
+  .log-toolbar,
+  .log-panel-header {
     align-items: flex-start;
     flex-direction: column;
   }
 
   .log-controls {
     width: 100%;
+    flex: 1 1 100%;
+    justify-content: flex-start;
   }
 
   .search-field {
