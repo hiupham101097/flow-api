@@ -65,7 +65,8 @@ const CrashRow = memo(function CrashRow({
           )}
         </div>
       </td>
-      <td className="action-cell" style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end', alignItems: 'center' }}>
+      <td className="action-cell">
+        <div className="table-row-actions">
         <button
           type="button"
           className="timeline-quick-btn"
@@ -93,6 +94,7 @@ const CrashRow = memo(function CrashRow({
         >
           Stack Trace →
         </button>
+        </div>
       </td>
     </tr>
   );
@@ -250,15 +252,15 @@ export default function CrashlyticsPanel({
       </div>
 
       <div className="table-scroll">
-        <table>
+        <table className="crashlytics-table">
           <thead>
             <tr>
-              <th style={{ width: '130px' }}>Thời gian</th>
-              <th style={{ width: '22%' }}>Mục tiêu (Job / App ID)</th>
-              <th style={{ width: '110px' }}>Mức độ</th>
+              <th>Thời gian</th>
+              <th>Mục tiêu (Job / App ID)</th>
+              <th>Mức độ</th>
               <th>Ngoại lệ & Tiêu đề lỗi</th>
-              <th style={{ width: '180px' }}>Thiết bị / OS</th>
-              <th style={{ width: '80px' }}><span className="sr-only">Thao tác</span></th>
+              <th>Thiết bị / OS</th>
+              <th><span className="sr-only">Thao tác</span></th>
             </tr>
           </thead>
           <tbody>

@@ -1000,6 +1000,42 @@ th:nth-child(6) { width: auto; }  /* Response / Error Data */
 th:nth-child(7) { width: 95px; }  /* Duration */
 th:nth-child(8) { width: 85px; }  /* Action */
 
+.log-panel table.crashlytics-table {
+  min-width: 1120px;
+}
+
+.log-panel table.crashlytics-table th:nth-child(1) { width: 148px; }
+.log-panel table.crashlytics-table th:nth-child(2) { width: 240px; }
+.log-panel table.crashlytics-table th:nth-child(3) { width: 130px; }
+.log-panel table.crashlytics-table th:nth-child(4) { width: auto; }
+.log-panel table.crashlytics-table th:nth-child(5) { width: 190px; }
+.log-panel table.crashlytics-table th:nth-child(6) { width: 184px; }
+
+.log-panel table.api-telemetry-table {
+  min-width: 1240px;
+}
+
+.log-panel table.api-telemetry-table th:nth-child(1) { width: 144px; }
+.log-panel table.api-telemetry-table th:nth-child(2) { width: 224px; }
+.log-panel table.api-telemetry-table th:nth-child(3) { width: 76px; }
+.log-panel table.api-telemetry-table th:nth-child(4) { width: 245px; }
+.log-panel table.api-telemetry-table th:nth-child(5) { width: 94px; }
+.log-panel table.api-telemetry-table th:nth-child(6) { width: auto; }
+.log-panel table.api-telemetry-table th:nth-child(7) { width: 100px; }
+.log-panel table.api-telemetry-table th:nth-child(8) { width: 184px; }
+
+.table-row-actions {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+.table-row-actions > button {
+  flex: 0 0 auto;
+}
+
 th {
   background: var(--surface-muted);
   color: var(--text-dim);

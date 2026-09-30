@@ -110,7 +110,8 @@ const LogRow = memo(function LogRow({
         </span>
       </td>
       <td className="duration-cell">{log.duration_ms || 0} ms</td>
-      <td className="action-cell" style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end', alignItems: 'center' }}>
+      <td className="action-cell">
+        <div className="table-row-actions">
         <button
           type="button"
           className="timeline-quick-btn"
@@ -136,6 +137,7 @@ const LogRow = memo(function LogRow({
         >
           Chi tiết →
         </button>
+        </div>
       </td>
     </tr>
   );
@@ -289,17 +291,17 @@ export default function ApiLogsPanel({
       </div>
 
       <div className="table-scroll">
-        <table>
+        <table className="api-telemetry-table">
           <thead>
             <tr>
-              <th style={{ width: '130px' }}>Thời gian</th>
-              <th style={{ width: '22%' }}>Nguồn (Job / Client)</th>
-              <th style={{ width: '70px' }}>Method</th>
+              <th>Thời gian</th>
+              <th>Nguồn (Job / Client)</th>
+              <th>Method</th>
               <th>Endpoint & URL</th>
-              <th style={{ width: '75px' }}>Status</th>
+              <th>Status</th>
               <th>Tóm tắt phản hồi</th>
-              <th style={{ width: '85px' }}>Độ trễ</th>
-              <th style={{ width: '80px' }}><span className="sr-only">Thao tác</span></th>
+              <th>Độ trễ</th>
+              <th><span className="sr-only">Thao tác</span></th>
             </tr>
           </thead>
           <tbody>
