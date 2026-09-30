@@ -6,129 +6,93 @@ const WEB_STEPS = [
   {
     tag: 'Angular 15+ (Standalone & Module)',
     title: 'Angular HTTP Interceptor & Global Telemetry',
-    detail: 'Khởi tạo Telemetry trong app.config.ts và gắn apiLoggerInterceptor vào provideHttpClient để tự động gom nhóm batch log, bắt lỗi runtime và che giấu PII.',
+    detail: 'Gắn HTTP interceptor và GlobalErrorHandler để ghi latency, mã lỗi, request ID, lỗi runtime và stack trace. Chỉ gắn user sau khi đăng nhập thành công.',
     code: `// app.config.ts
-import { ApplicationConfig, provideHttpClient, withInterceptors } from '@angular/core';
-import { apiLoggerInterceptor, ApiLoggerService } from './services/api-logger.service';
+import { ApplicationConfig, ErrorHandler, provideHttpClient, withInterceptors } from '@angular/core';
+import { apiLoggerInterceptor, ApiLoggerService, GlobalErrorHandler } from './services/api-logger.service';
 
-// Khởi tạo telemetry cấu hình
+// Dùng đúng app_identifier đã khai báo trong cấu hình ứng dụng
 ApiLoggerService.initialize({
   appId: 'vn.myportal.web',
   serverUrl: 'https://flow-api.hieupham101097.workers.dev',
-  userName: 'nguyen_van_a', // Cập nhật sau khi đăng nhập: ApiLoggerService.setUserName('...')
 });
 
 export const appConfig: ApplicationConfig = {
   providers: [
     provideHttpClient(withInterceptors([apiLoggerInterceptor])),
+    { provide: ErrorHandler, useClass: GlobalErrorHandler },
   ],
-};`,
+};
+
+// Sau khi đăng nhập thành công:
+// ApiLoggerService.setUserName(user.id || user.username);`,
   },
   {
     tag: 'Axios / React / Vue / Next.js',
-    title: 'Axios Instance Monitor (Có Payload & User Context)',
-    detail: 'Gắn interceptor vào Axios instance dùng chung để tự động đo lường thời gian thực thi, thu thập request/response payload (đã mask PII) và gắn user context cho breadcrumbs.',
+    title: 'Axios Instance Monitor (Timeout, HTTP 500 & Request ID)',
+    detail: 'Dùng helper SDK trên Axios instance dùng chung. SDK ghi thời gian, status, error type/code, request ID và server request ID; truyền user ID nội bộ sau đăng nhập để ghép breadcrumbs.',
     code: `// api-client.js
 import axios from 'axios';
+import { setupAxiosMonitor } from './utils/api-logger';
 
 export const apiClient = axios.create({ baseURL: 'https://api.yourdomain.com' });
 
-apiClient.interceptors.request.use((config) => {
-  config.metadata = { startTime: performance.now() };
-  return config;
-});
+setupAxiosMonitor(apiClient, 'vn.myportal.web', () => ({
+  // Trả về ID nội bộ, không dùng email/số điện thoại nếu không cần thiết
+  userName: authStore.user?.id,
+  deviceName: typeof navigator !== 'undefined' ? navigator.userAgent.slice(0, 120) : 'Web server',
+}));
 
-apiClient.interceptors.response.use(
-  (res) => {
-    const duration = Math.round(performance.now() - (res.config.metadata?.startTime || 0));
-    fetch('https://flow-api.hieupham101097.workers.dev/logs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        app_id: 'vn.myportal.web',
-        endpoint: res.config.url,
-        method: res.config.method?.toUpperCase(),
-        status_code: res.status,
-        duration_ms: duration,
-        request_payload: res.config.data ? JSON.stringify(res.config.data) : null,
-        response_payload: res.data ? JSON.stringify(res.data).slice(0, 4000) : null,
-        user_name: localStorage.getItem('username') || undefined,
-        device_name: navigator.userAgent.slice(0, 80),
-      }),
-      keepalive: true,
-    }).catch(() => {});
-    return res;
-  },
-  (err) => {
-    const duration = Math.round(performance.now() - (err.config?.metadata?.startTime || 0));
-    fetch('https://flow-api.hieupham101097.workers.dev/logs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        app_id: 'vn.myportal.web',
-        endpoint: err.config?.url || 'unknown',
-        method: err.config?.method?.toUpperCase() || 'GET',
-        status_code: err.response?.status || 500,
-        error_message: err.message,
-        duration_ms: duration,
-        request_payload: err.config?.data ? JSON.stringify(err.config?.data) : null,
-        response_payload: err.response?.data ? JSON.stringify(err.response?.data).slice(0, 4000) : null,
-        user_name: localStorage.getItem('username') || undefined,
-        device_name: navigator.userAgent.slice(0, 80),
-      }),
-      keepalive: true,
-    }).catch(() => {});
-    return Promise.reject(err);
-  }
-);`,
+// SDK phân biệt timeout/mất mạng với HTTP 5xx và không tự gán status 500
+// khi request không nhận được response.`,
   },
   {
     tag: 'Fetch API / Vanilla JS',
-    title: 'Monitored Fetch Wrapper (Tự Động Bắt Lỗi & Breadcrumbs)',
-    detail: 'Bọc hàm window.fetch mặc định để tự động đo đạc độ trễ, lưu payload và gửi log mạng không đồng bộ lên Cloudflare Hub.',
+    title: 'Fetch Wrapper (Timeout, Mất mạng & HTTP 5xx)',
+    detail: 'Dùng wrapper cho các request Fetch để ghi duration, status, loại lỗi, mã lỗi và request ID. Lỗi không có HTTP response được ghi status 0 thay vì giả thành 500.',
     code: `// monitored-fetch.js
-export async function monitoredFetch(url, options = {}) {
-  const start = performance.now();
-  try {
-    const res = await window.fetch(url, options);
-    const duration = Math.round(performance.now() - start);
-    window.fetch('https://flow-api.hieupham101097.workers.dev/logs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        app_id: 'vn.myportal.web',
-        endpoint: String(url),
-        method: (options.method || 'GET').toUpperCase(),
-        status_code: res.status,
-        duration_ms: duration,
-        request_payload: options.body ? String(options.body).slice(0, 2000) : null,
-        user_name: window.__CURRENT_USER_NAME || undefined,
-        device_name: navigator.userAgent.slice(0, 80),
-      }),
-      keepalive: true,
-    }).catch(() => {});
-    return res;
-  } catch (err) {
-    const duration = Math.round(performance.now() - start);
-    window.fetch('https://flow-api.hieupham101097.workers.dev/logs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        app_id: 'vn.myportal.web',
-        endpoint: String(url),
-        method: (options.method || 'GET').toUpperCase(),
-        status_code: 500,
-        error_message: err.message,
-        duration_ms: duration,
-        request_payload: options.body ? String(options.body).slice(0, 2000) : null,
-        user_name: window.__CURRENT_USER_NAME || undefined,
-        device_name: navigator.userAgent.slice(0, 80),
-      }),
-      keepalive: true,
-    }).catch(() => {});
-    throw err;
-  }
-}`,
+import { createMonitoredFetch } from './utils/api-logger';
+
+export const monitoredFetch = createMonitoredFetch(
+  'vn.myportal.web',
+  () => ({ userName: authStore.user?.id })
+);
+
+const response = await monitoredFetch('/v1/profile');`,
+  },
+  {
+    tag: 'React / Vue / Next.js Runtime Errors',
+    title: 'Bắt lỗi JavaScript chưa xử lý và gửi stack trace',
+    detail: 'Đăng ký global handlers một lần lúc khởi động Web App để ghi nhận lỗi runtime và Promise rejection. Với lỗi đã bắt bằng try/catch, chủ động gửi non-fatal cùng màn hình và stack trace.',
+    code: `// telemetry-errors.js
+const APP_IDENTIFIER = 'vn.myportal.web'; // Trùng app_identifier đã đăng ký
+const MONITOR_URL = 'https://flow-api.hieupham101097.workers.dev';
+
+function reportRuntimeError(error, source) {
+  const exception = error instanceof Error ? error : new Error(String(error));
+  fetch(MONITOR_URL + '/crashes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    keepalive: true,
+    body: JSON.stringify({
+      app_identifier: APP_IDENTIFIER,
+      error_message: exception.message,
+      stack_trace: exception.stack,
+      is_fatal: false,
+      device_info: { platform: navigator.platform, device_name: navigator.userAgent.slice(0, 120) },
+      custom_attributes: {
+        source,
+        screen_name: location.pathname, // Không gửi query string có thể chứa dữ liệu nhạy cảm
+        user_id: authStore.user?.id || null,
+      },
+    }),
+  }).catch(() => {});
+}
+
+window.addEventListener('error', (event) => reportRuntimeError(event.error || event.message, 'window.error'));
+window.addEventListener('unhandledrejection', (event) => reportRuntimeError(event.reason, 'unhandledrejection'));
+
+// Với lỗi nghiệp vụ đã bắt: reportRuntimeError(error, 'checkout');`,
   },
 ];
 
@@ -136,8 +100,9 @@ const APP_STEPS = [
   {
     tag: 'Flutter Crashlytics & Error Handler',
     title: 'AppTelemetry Initialization & Crash Logger',
-    detail: 'Khởi tạo AppTelemetry trong main() và gắn FlutterError.onError để bắt và gửi unhandled exceptions kèm full stack trace.',
+    detail: 'Gắn cả FlutterError.onError và PlatformDispatcher.onError để thu thập lỗi framework/lỗi bất đồng bộ với stack trace. Sau đăng nhập, cập nhật ID người dùng nội bộ để ghép log.',
     code: `// main.dart
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:your_app/utils/api_logger.dart';
 
@@ -145,7 +110,6 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   AppTelemetry.initialize(
     appId: 'vn.fizahub.app',
-    userName: 'nguyen_van_a', // Cập nhật sau khi đăng nhập bằng AppTelemetry.setUserName('...')
   );
 
   // Bắt toàn bộ lỗi runtime chưa được try-catch
@@ -154,16 +118,31 @@ void main() async {
       exception: details.exception,
       stack: details.stack,
       isFatal: true,
+      customAttributes: {
+        'user_id': AppTelemetry.userName,
+        'screen_name': 'CurrentScreen',
+      },
     );
   };
 
+  PlatformDispatcher.instance.onError = (error, stack) {
+    AppTelemetry.recordCrash(
+      exception: error,
+      stack: stack,
+      isFatal: true,
+      customAttributes: {'user_id': AppTelemetry.userName},
+    );
+    return true;
+  };
+
   runApp(const MyApp());
+  // Sau khi đăng nhập thành công, gọi AppTelemetry.setUserName(user.id).
 }`,
   },
   {
     tag: 'Dio HTTP Client (Recommended)',
-    title: 'Dio Interceptor với Request/Response Payload & User Identity',
-    detail: 'Gắn Interceptor vào Dio client dùng chung để tự động thu thập payload, độ trễ và định danh người dùng phục vụ truy vết Issue APM.',
+    title: 'Dio Interceptor (Timeout, HTTP 500 & Server Request ID)',
+    detail: 'Gắn interceptor vào Dio client dùng chung. Phân loại timeout/mạng/HTTP riêng biệt, ghi status thật, error code, stack trace và request ID từ server nếu có.',
     code: `// dio_client.dart
 import 'package:dio/dio.dart';
 import 'package:your_app/utils/api_logger.dart';
@@ -173,11 +152,13 @@ final dio = Dio();
 dio.interceptors.add(InterceptorsWrapper(
   onRequest: (options, handler) {
     options.extra['startTime'] = DateTime.now();
+    options.extra['telemetryRequestId'] = ApiLogger.createRequestId();
     return handler.next(options);
   },
   onResponse: (response, handler) {
     final start = response.requestOptions.extra['startTime'] as DateTime?;
     final duration = start != null ? DateTime.now().difference(start).inMilliseconds : 0;
+    final requestId = response.requestOptions.extra['telemetryRequestId'] as String?;
     ApiLogger.record(
       appId: 'vn.fizahub.app',
       endpoint: response.requestOptions.uri.toString(),
@@ -186,6 +167,9 @@ dio.interceptors.add(InterceptorsWrapper(
       requestPayload: response.requestOptions.data,
       responsePayload: response.data,
       durationMs: duration,
+      requestId: requestId,
+      serverRequestId: response.headers.value('x-request-id') ?? response.headers.value('cf-ray') ??
+          (response.data is Map ? response.data['request_id']?.toString() : null),
       userName: AppTelemetry.userName,
       deviceName: AppTelemetry.deviceName,
     );
@@ -194,12 +178,20 @@ dio.interceptors.add(InterceptorsWrapper(
   onError: (DioException err, handler) {
     final start = err.requestOptions.extra['startTime'] as DateTime?;
     final duration = start != null ? DateTime.now().difference(start).inMilliseconds : 0;
+    final statusCode = err.response?.statusCode ?? 0;
+    final isTimeout = err.type.name.toLowerCase().contains('timeout');
     ApiLogger.record(
       appId: 'vn.fizahub.app',
       endpoint: err.requestOptions.uri.toString(),
       method: err.requestOptions.method,
-      statusCode: err.response?.statusCode ?? 500,
+      statusCode: statusCode,
       errorMessage: err.message ?? err.error?.toString(),
+      errorType: isTimeout ? 'timeout' : statusCode == 0 ? 'network_error' : statusCode >= 500 ? 'server_error' : 'http_error',
+      errorCode: err.type.name,
+      stackTrace: err.stackTrace.toString(),
+      requestId: err.requestOptions.extra['telemetryRequestId'] as String?,
+      serverRequestId: err.response?.headers.value('x-request-id') ?? err.response?.headers.value('cf-ray') ??
+          (err.response?.data is Map ? err.response?.data['request_id']?.toString() : null),
       requestPayload: err.requestOptions.data,
       responsePayload: err.response?.data,
       durationMs: duration,
@@ -284,13 +276,18 @@ curl -X POST https://flow-api.hieupham101097.workers.dev/telemetry/batch \\
 curl -X POST https://flow-api.hieupham101097.workers.dev/logs \\
   -H "Content-Type: application/json" \\
   -d '{
-    "app_id": "vn.fizahub.app",
+    "app_identifier": "vn.fizahub.app",
     "endpoint": "https://api.domain.com/v1/payment/checkout",
     "method": "POST",
     "status_code": 500,
+    "error_type": "server_error",
+    "error_code": "ERR_DB_DEADLOCK",
+    "request_id": "client-generated-id-456",
+    "server_request_id": "backend-request-id-789",
+    "stack_trace": "Error: deadlock\\n at createCheckout (checkout.service.ts:88)",
     "duration_ms": 680,
     "error_message": "Internal Server Error: Database deadlock detected",
-    "request_payload": "{\\"cart_id\\": 9921, \\"amount\\": 350000}",
+    "request_payload": "{\\"cart_item_count\\": 2}",
     "response_payload": "{\\"code\\": \\"ERR_DB_DEADLOCK\\", \\"message\\": \\"Deadlock occurred\\"}",
     "user_name": "nguyen_van_a",
     "device_name": "Samsung Galaxy S24",
@@ -307,7 +304,7 @@ curl -X POST https://flow-api.hieupham101097.workers.dev/logs \\
 curl -X POST https://flow-api.hieupham101097.workers.dev/crashes \\
   -H "Content-Type: application/json" \\
   -d '{
-    "app_id": "vn.fizahub.app",
+    "app_identifier": "vn.fizahub.app",
     "error_message": "RangeError (index): Invalid value: Valid value range is empty: 0",
     "stack_trace": "package:flutter/src/widgets/framework.dart:456:12\\npackage:fizahub/views/home.dart:88:5",
     "is_fatal": 1,
@@ -317,7 +314,7 @@ curl -X POST https://flow-api.hieupham101097.workers.dev/crashes \\
       "device_name": "SM-S928B"
     },
     "custom_attributes": {
-      "user_name": "nguyen_van_a",
+      "user_id": "user-123",
       "screen_name": "HomeDashboardScreen"
     }
   }'`,
@@ -332,11 +329,11 @@ curl -X POST https://flow-api.hieupham101097.workers.dev/crashes \\
 curl -X POST https://flow-api.hieupham101097.workers.dev/events \\
   -H "Content-Type: application/json" \\
   -d '{
-    "app_id": "vn.fizahub.app",
+    "app_identifier": "vn.fizahub.app",
     "event_name": "ekyc_step_2_face_match",
     "event_type": "funnel",
     "screen_name": "EkycLivenessScreen",
-    "user_name": "nguyen_van_a",
+    "user_id": "user-123",
     "device_name": "iPhone 15 Pro",
     "parameters": {
       "confidence_score": 0.98,
@@ -555,6 +552,54 @@ export default function Setup() {
         )}
       </div>
 
+      {activeTab !== 'api' && (
+        <section
+          style={{
+            background: 'var(--surface-raised)',
+            border: '1px solid rgba(99, 102, 241, 0.32)',
+            borderRadius: 'var(--radius)',
+            padding: '1.25rem 1.5rem',
+            marginBottom: '1.5rem',
+          }}
+        >
+          <h3 style={{ margin: '0 0 0.4rem', fontSize: '1rem', color: 'var(--text)' }}>
+            Web và App cần gửi thêm gì để tìm nguyên nhân lỗi?
+          </h3>
+          <p style={{ margin: '0 0 1rem', color: 'var(--text-muted)', fontSize: '0.82rem', lineHeight: 1.55 }}>
+            Thêm các trường dưới đây vào HTTP interceptor, Fetch wrapper và global crash handler. SDK có thể tự gửi chúng; nếu tích hợp thủ công, dùng cùng tên trường.
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '0.7rem' }}>
+            <div style={{ padding: '0.85rem', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)' }}>
+              <strong style={{ color: '#c084fc', fontSize: '0.82rem' }}>1. App và tenant</strong>
+              <p style={{ margin: '0.35rem 0 0', color: 'var(--text-muted)', fontSize: '0.78rem', lineHeight: 1.5 }}>
+                Gửi <code>app_identifier</code> đúng mã đã đăng ký trong cấu hình ứng dụng. Worker tự tìm tenant theo mã này; dữ liệu ứng dụng hiện tại vào tenant 1. Không gửi <code>tenant_id</code> từ client.
+              </p>
+            </div>
+            <div style={{ padding: '0.85rem', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)' }}>
+              <strong style={{ color: '#fbbf24', fontSize: '0.82rem' }}>2. Thông tin mỗi API request</strong>
+              <p style={{ margin: '0.35rem 0 0', color: 'var(--text-muted)', fontSize: '0.78rem', lineHeight: 1.5 }}>
+                Ghi <code>duration_ms</code>, status HTTP thật, <code>error_message</code>, <code>error_type</code> (timeout, network_error, server_error), <code>error_code</code> và response body lỗi đã lọc dữ liệu nhạy cảm. Không có response thì dùng status 0/null, đừng gán 500.
+              </p>
+            </div>
+            <div style={{ padding: '0.85rem', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)' }}>
+              <strong style={{ color: '#38bdf8', fontSize: '0.82rem' }}>3. Dấu vết để đối chiếu</strong>
+              <p style={{ margin: '0.35rem 0 0', color: 'var(--text-muted)', fontSize: '0.78rem', lineHeight: 1.5 }}>
+                Tạo <code>request_id</code> riêng cho mỗi lần gọi; lấy <code>server_request_id</code> từ header <code>x-request-id</code> hoặc JSON response. Gửi thêm <code>user_name</code> (ID nội bộ sau đăng nhập), <code>device_name</code> và stack trace khi có.
+              </p>
+            </div>
+            <div style={{ padding: '0.85rem', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)' }}>
+              <strong style={{ color: '#f87171', fontSize: '0.82rem' }}>4. Crash và lỗi runtime</strong>
+              <p style={{ margin: '0.35rem 0 0', color: 'var(--text-muted)', fontSize: '0.78rem', lineHeight: 1.5 }}>
+                Web đăng ký <code>error</code>/<code>unhandledrejection</code>; Flutter đăng ký <code>FlutterError.onError</code>/<code>PlatformDispatcher.onError</code>. Gửi <code>error_message</code>, <code>stack_trace</code>, <code>is_fatal</code>, OS/thiết bị và màn hình.
+              </p>
+            </div>
+          </div>
+          <p style={{ margin: '0.85rem 0 0', color: 'var(--text-dim)', fontSize: '0.76rem', lineHeight: 1.5 }}>
+            Trước khi gửi payload, loại bỏ password, token, OTP, thông tin định danh/thanh toán và query string nhạy cảm. Chỉ gửi payload đã rút gọn cần thiết để điều tra.
+          </p>
+        </section>
+      )}
+
       {/* New Configuration Parameters Table */}
       <div
         style={{
@@ -575,7 +620,7 @@ export default function Setup() {
           </span>
         </div>
         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1rem', lineHeight: 1.5 }}>
-          Để hệ thống tự động liên kết lỗi vào bảng <strong>Issues APM</strong>, vẽ <strong>User Journey</strong> và hiển thị chuỗi <strong>Breadcrumbs (10 request gần nhất của user trước khi lỗi/crash)</strong>, hãy bổ sung các trường cấu hình dưới đây:
+          Để hệ thống tự động liên kết lỗi vào bảng <strong>Issues APM</strong>, vẽ <strong>User Journey</strong> và tìm nguyên nhân timeout/500/crash, hãy gửi đúng các trường dưới đây. Với log batch, endpoint là <code>/telemetry/batch</code>:
         </p>
 
         <div style={{ overflowX: 'auto' }}>
@@ -590,13 +635,19 @@ export default function Setup() {
             </thead>
             <tbody>
               <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', color: '#c084fc', fontWeight: 600 }}>app_identifier</td>
+                <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)' }}>string</td>
+                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>/logs, /telemetry/batch, /crashes, /events</td>
+                <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text)' }}>Mã ứng dụng đã đăng ký. Worker dùng mã này để tìm tenant của app; hiện tại app đang theo dõi thuộc tenant 1. Client không gửi tenant_id.</td>
+              </tr>
+              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                 <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', color: '#38bdf8', fontWeight: 600 }}>
                   user_name
                 </td>
                 <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)' }}>string</td>
-                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>/logs, /batch, /crashes, /events</td>
+                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>/logs, /telemetry/batch, /crashes, /events</td>
                 <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text)' }}>
-                  <strong>(Rất quan trọng)</strong> Tên tài khoản hoặc ID người dùng. Dùng để ghép nối toàn bộ lịch sử 10 request người dùng (Breadcrumbs trail) trước khi nổ lỗi 500 hoặc Crash.
+                  ID nội bộ hoặc username sau khi đăng nhập. Dùng để ghép log API và hành trình của cùng người dùng; tránh gửi email/số điện thoại nếu không cần.
                 </td>
               </tr>
               <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
@@ -604,7 +655,7 @@ export default function Setup() {
                   device_name
                 </td>
                 <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)' }}>string</td>
-                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>/logs, /batch, /crashes, /events</td>
+                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>/logs, /telemetry/batch, /crashes, /events</td>
                 <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text)' }}>
                   Tên dòng máy thật (ví dụ: <code>iPhone 15 Pro</code>, <code>Samsung S24</code>, <code>Chrome 128 (Windows 11)</code>). Dùng để phân loại thiết bị và tìm vết khi user ẩn danh.
                 </td>
@@ -614,9 +665,9 @@ export default function Setup() {
                   request_payload
                 </td>
                 <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)' }}>string | object</td>
-                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>/logs, /batch</td>
+                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>/logs, /telemetry/batch</td>
                 <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text)' }}>
-                  Dữ liệu body hoặc params gửi lên của request. Được tự động che giấu PII (Password, Token, OTP) và lưu vào Failed Request Snapshot của Issue.
+                  Body hoặc params cần thiết để điều tra. SDK chính thức che một số key nhạy cảm; tích hợp thủ công phải tự lọc password, token, OTP và dữ liệu định danh trước khi gửi.
                 </td>
               </tr>
               <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
@@ -624,7 +675,7 @@ export default function Setup() {
                   response_payload
                 </td>
                 <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)' }}>string | object</td>
-                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>/logs, /batch</td>
+                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>/logs, /telemetry/batch</td>
                 <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text)' }}>
                   Nội dung kết quả server trả về (tối đa 4000 ký tự). Rất hữu ích khi API lỗi 4xx/5xx để xem ngay mã lỗi backend trả về mà không cần tra log máy chủ.
                 </td>
@@ -634,17 +685,41 @@ export default function Setup() {
                   duration_ms
                 </td>
                 <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)' }}>number (int)</td>
-                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>/logs, /batch</td>
+                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>/logs, /telemetry/batch</td>
                 <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text)' }}>
                   Thời gian thực thi API (latency) tính bằng mili-giây. Dùng để tính toán độ trễ trung bình P95/P99 và cảnh báo API chậm.
                 </td>
+              </tr>
+              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', color: '#f87171', fontWeight: 600 }}>error_type</td>
+                <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)' }}>string</td>
+                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>/logs, /telemetry/batch</td>
+                <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text)' }}>Loại lỗi: <code>timeout</code>, <code>network_error</code>, <code>server_error</code>, <code>http_error</code>. Dùng status 0/null khi không có HTTP response.</td>
+              </tr>
+              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', color: '#f87171', fontWeight: 600 }}>error_message / error_code</td>
+                <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)' }}>string</td>
+                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>/logs, /telemetry/batch</td>
+                <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text)' }}>Thông báo lỗi và mã từ HTTP client/server (ví dụ <code>ECONNABORTED</code> hoặc mã lỗi backend).</td>
+              </tr>
+              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', color: '#f87171', fontWeight: 600 }}>stack_trace</td>
+                <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)' }}>string</td>
+                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>/logs, /telemetry/batch, /crashes</td>
+                <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text)' }}>Stack trace của lỗi API hoặc crash để xác định file/dòng gây lỗi.</td>
+              </tr>
+              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', color: '#38bdf8', fontWeight: 600 }}>request_id / server_request_id</td>
+                <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)' }}>string</td>
+                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>/logs, /telemetry/batch</td>
+                <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text)' }}>ID do client tạo cho mỗi lần gọi và ID server trả ở header <code>x-request-id</code> hoặc body <code>request_id</code>; dùng để đối chiếu log hai phía.</td>
               </tr>
               <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                 <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', color: '#e879f9', fontWeight: 600 }}>
                   custom_attributes
                 </td>
                 <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)' }}>object</td>
-                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>/crashes, /batch</td>
+                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>/crashes, /telemetry/batch</td>
                 <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text)' }}>
                   Object chứa metadata tùy ý đính kèm với Crashlytics (ví dụ: phiên bản app <code>app_version</code>, màn hình đang đứng <code>screen_name</code>, user ID...).
                 </td>
@@ -654,7 +729,7 @@ export default function Setup() {
                   parameters
                 </td>
                 <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text-muted)' }}>object</td>
-                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>/events, /batch</td>
+                <td style={{ padding: '0.6rem 0.75rem', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>/events, /telemetry/batch</td>
                 <td style={{ padding: '0.6rem 0.75rem', color: 'var(--text)' }}>
                   Object tham số của sự kiện nghiệp vụ (ví dụ: bước trong phễu EKYC <code>step_order: 1</code>, trạng thái <code>success: true</code>).
                 </td>

@@ -174,7 +174,9 @@ class LoggingClient extends http.BaseClient {
             : (response.statusCode >= 500
                 ? 'server_error'
                 : (response.statusCode >= 400 ? 'http_error' : null)),
-        serverRequestId: response.headers['x-request-id'] ?? response.headers['cf-ray'],
+        serverRequestId: response.headers['x-request-id'] ??
+            response.headers['cf-ray'] ??
+            (parsedResponse is Map ? parsedResponse['request_id']?.toString() : null),
         requestPayload: requestPayload,
         responsePayload: parsedResponse ?? responseString,
         durationMs: duration,

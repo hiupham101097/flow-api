@@ -334,7 +334,7 @@ export class ApiLoggerService {
         is_fatal: params.isFatal ? 1 : 0,
         device_info: {
           browser: ApiLoggerService.deviceName,
-          url: typeof window !== 'undefined' ? window.location.href : '',
+          url: typeof window !== 'undefined' ? window.location.pathname : '',
           ...ApiLoggerService.maskPII(params.deviceInfo || {}),
         },
         user_name: ApiLoggerService.userName || undefined,
@@ -425,7 +425,7 @@ export const apiLoggerInterceptor: HttpInterceptorFn = (req, next) => {
             requestPayload: req.body,
             responsePayload: event.body,
             requestId,
-            serverRequestId: event.headers.get('x-request-id') || event.headers.get('cf-ray'),
+            serverRequestId: event.headers.get('x-request-id') || event.headers.get('cf-ray') || event.body?.request_id || null,
           });
         }
       },
@@ -454,7 +454,7 @@ export const apiLoggerInterceptor: HttpInterceptorFn = (req, next) => {
         errorCode: error?.code || error?.error?.name || error?.name || null,
         stackTrace: error?.stack || null,
         requestId,
-        serverRequestId: error?.headers?.get?.('x-request-id') || error?.headers?.get?.('cf-ray') || null,
+        serverRequestId: error?.headers?.get?.('x-request-id') || error?.headers?.get?.('cf-ray') || error?.error?.request_id || null,
       });
 
       return throwError(() => error);
@@ -492,7 +492,7 @@ export class ApiLoggerInterceptor implements HttpInterceptor {
               requestPayload: req.body,
               responsePayload: event.body,
               requestId,
-              serverRequestId: event.headers.get('x-request-id') || event.headers.get('cf-ray'),
+              serverRequestId: event.headers.get('x-request-id') || event.headers.get('cf-ray') || event.body?.request_id || null,
             });
           }
         },
@@ -521,7 +521,7 @@ export class ApiLoggerInterceptor implements HttpInterceptor {
           errorCode: error?.code || error?.error?.name || error?.name || null,
           stackTrace: error?.stack || null,
           requestId,
-          serverRequestId: error?.headers?.get?.('x-request-id') || error?.headers?.get?.('cf-ray') || null,
+          serverRequestId: error?.headers?.get?.('x-request-id') || error?.headers?.get?.('cf-ray') || error?.error?.request_id || null,
         });
 
         return throwError(() => error);

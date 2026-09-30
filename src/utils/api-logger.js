@@ -5,6 +5,35 @@
  */
 
 const WORKER_URL = 'https://flow-api.hieupham101097.workers.dev/logs'; // Replace with live URL after deployment
+const PII_KEYS = /password|(^|_)pass(word)?($|_)|(^|_)pwd($|_)|token|authorization|bearer|secret|credit.?card|card.?number|cvv|pin|otp|email|phone|national.?id/i;
+
+const sanitizeTelemetryValue = (value, key = '') => {
+  if (PII_KEYS.test(key)) return '[REDACTED]';
+  if (Array.isArray(value)) return value.map((item) => sanitizeTelemetryValue(item));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([childKey, childValue]) => [
+      childKey,
+      sanitizeTelemetryValue(childValue, childKey),
+    ]));
+  }
+  if (typeof value !== 'string') return value;
+
+  try {
+    return JSON.stringify(sanitizeTelemetryValue(JSON.parse(value)));
+  } catch (_) {
+    return value
+      .replace(/\bBearer\s+[\w./+=-]+/gi, 'Bearer [REDACTED]')
+      .replace(/((?:password|passwd|pwd|token|authorization|secret|otp|cvv|pin)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,&]+)/gi, '$1[REDACTED]');
+  }
+};
+
+const readTelemetryContext = (getContext) => {
+  try {
+    return typeof getContext === 'function' ? (getContext() || {}) : {};
+  } catch (_) {
+    return {};
+  }
+};
 
 const createRequestId = () => globalThis.crypto?.randomUUID?.()
   || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -78,14 +107,24 @@ const getResponseErrorMessage = (payload) => {
 /**
  * Utility to log API telemetry to the monitor in the background.
  */
-const sendTelemetry = async (logData, appId, deviceName) => {
+const sendTelemetry = async (logData, appId, deviceName, userName) => {
   try {
     const resolvedDevice = deviceName || (typeof navigator !== 'undefined' ? (navigator.userAgent?.includes('Chrome') ? 'Google Chrome' : navigator.userAgent?.includes('Safari') ? 'Apple Safari' : navigator.userAgent?.includes('Firefox') ? 'Mozilla Firefox' : 'Trình duyệt Web') : 'Web Client');
+    const sanitizedLog = {
+      ...logData,
+      request_payload: sanitizeTelemetryValue(logData.request_payload, 'request_payload'),
+      response_payload: sanitizeTelemetryValue(logData.response_payload, 'response_payload'),
+    };
     // Send in background, don't await/block the main thread
     fetch(WORKER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ app_id: appId, device_name: resolvedDevice, ...logData }),
+      body: JSON.stringify({
+        app_identifier: appId,
+        device_name: resolvedDevice,
+        ...(userName ? { user_name: String(userName) } : {}),
+        ...sanitizedLog,
+      }),
       // keepalive ensures the request finishes even if the page is unloading
       keepalive: true, 
     }).catch(console.error); 
@@ -98,7 +137,7 @@ const sendTelemetry = async (logData, appId, deviceName) => {
  * Example 1: Custom Fetch Wrapper
  * Use this instead of standard `fetch()` in your app.
  */
-export const createMonitoredFetch = (appId = 'default_web') => async (url, options = {}) => {
+export const createMonitoredFetch = (appId = 'default_web', getContext = () => ({})) => async (url, options = {}) => {
   const startTime = performance.now();
   const method = options.method || 'GET';
   const requestId = createRequestId();
@@ -108,6 +147,7 @@ export const createMonitoredFetch = (appId = 'default_web') => async (url, optio
     const duration = Math.round(performance.now() - startTime);
     const responsePayload = response.ok ? null : await readErrorPayload(response);
 
+    const context = readTelemetryContext(getContext);
     sendTelemetry({
       endpoint: url,
       method: method,
@@ -115,16 +155,17 @@ export const createMonitoredFetch = (appId = 'default_web') => async (url, optio
       error_message: response.ok ? null : (getResponseErrorMessage(responsePayload) || `HTTP Error ${response.status}`),
       error_type: response.ok ? null : classifyError(null, response.status),
       request_id: requestId,
-      server_request_id: getServerRequestId(response),
+      server_request_id: getServerRequestId(response) || responsePayload?.request_id || null,
       request_payload: options.body,
       response_payload: responsePayload,
       duration_ms: duration,
-    }, appId);
+    }, appId, context.deviceName, context.userName);
 
     return response;
   } catch (error) {
     const duration = Math.round(performance.now() - startTime);
     
+    const context = readTelemetryContext(getContext);
     sendTelemetry({
       endpoint: url,
       method: method,
@@ -136,7 +177,7 @@ export const createMonitoredFetch = (appId = 'default_web') => async (url, optio
       request_id: requestId,
       request_payload: options.body,
       duration_ms: duration,
-    }, appId);
+    }, appId, context.deviceName, context.userName);
 
     throw error;
   }
@@ -146,7 +187,7 @@ export const createMonitoredFetch = (appId = 'default_web') => async (url, optio
  * Example 2: Axios Interceptor Setup
  * Call this function once when your app starts: `setupAxiosMonitor(axios, 'my_web_app')`
  */
-export const setupAxiosMonitor = (axiosInstance, appId = 'default_web') => {
+export const setupAxiosMonitor = (axiosInstance, appId = 'default_web', getContext = () => ({})) => {
   axiosInstance.interceptors.request.use((config) => {
     config.metadata = { ...config.metadata, startTime: performance.now(), requestId: createRequestId() };
     return config;
@@ -155,15 +196,16 @@ export const setupAxiosMonitor = (axiosInstance, appId = 'default_web') => {
   axiosInstance.interceptors.response.use(
     (response) => {
       const duration = Math.round(performance.now() - response.config.metadata.startTime);
+      const context = readTelemetryContext(getContext);
       sendTelemetry({
         endpoint: response.config.url,
         method: (response.config.method || 'GET').toUpperCase(),
         status_code: response.status,
         request_id: response.config.metadata?.requestId,
-        server_request_id: response.headers?.['x-request-id'] || response.headers?.['cf-ray'] || null,
+        server_request_id: response.headers?.['x-request-id'] || response.headers?.['cf-ray'] || response.data?.request_id || null,
         request_payload: response.config.data,
         duration_ms: duration,
-      }, appId);
+      }, appId, context.deviceName, context.userName);
       return response;
     },
     (error) => {
@@ -171,6 +213,7 @@ export const setupAxiosMonitor = (axiosInstance, appId = 'default_web') => {
       const duration = Math.round(performance.now() - (config.metadata?.startTime || performance.now()));
       const statusCode = error.response?.status ?? 0;
       const responsePayload = error.response?.data ?? null;
+      const context = readTelemetryContext(getContext);
       sendTelemetry({
         endpoint: config.url,
         method: (config.method || 'GET').toUpperCase(),
@@ -179,12 +222,12 @@ export const setupAxiosMonitor = (axiosInstance, appId = 'default_web') => {
         error_code: error.code || error.name || null,
         stack_trace: error.stack || null,
         request_id: config.metadata?.requestId,
-        server_request_id: error.response?.headers?.['x-request-id'] || error.response?.headers?.['cf-ray'] || null,
+        server_request_id: error.response?.headers?.['x-request-id'] || error.response?.headers?.['cf-ray'] || responsePayload?.request_id || null,
         error_message: getResponseErrorMessage(responsePayload) || error.message,
         request_payload: config.data,
         response_payload: responsePayload,
         duration_ms: duration,
-      }, appId);
+      }, appId, context.deviceName, context.userName);
       return Promise.reject(error);
     }
   );
