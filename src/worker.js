@@ -1426,7 +1426,7 @@ const QUOTA_MESSAGE =
 
 const SESSION_COOKIE_NAME = 'flow_session';
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 14;
-const PASSWORD_HASH_ITERATIONS = 310000;
+const PASSWORD_HASH_ITERATIONS = 100000;
 const textEncoder = new TextEncoder();
 
 const bytesToHex = (bytes) => Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
