@@ -791,12 +791,19 @@ input:focus-visible {
 
 .log-panel-header {
   align-items: flex-start;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 0.6rem;
 }
 
 .log-title-group {
   flex: 1 1 240px;
   min-width: 0;
   gap: 0.65rem;
+}
+
+.log-panel-header .log-title-group {
+  flex: 0 0 auto;
 }
 
 .log-title-group > span {
@@ -814,6 +821,19 @@ input:focus-visible {
   justify-content: flex-end;
   min-width: 0;
   gap: 0.65rem;
+}
+
+.log-panel-header .log-controls {
+  width: 100%;
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  gap: 0.5rem;
+}
+
+.log-panel-header .search-field {
+  width: 230px;
+  min-width: 205px;
+  flex: 0 1 230px;
 }
 
 .filter-tabs {
