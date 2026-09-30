@@ -22,7 +22,11 @@ function Login() {
 
   useEffect(() => {
     fetch(`${API_BASE_URL}/auth/status`, { cache: 'no-store' })
-      .then((response) => response.json())
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || 'Không kiểm tra được trạng thái tài khoản.');
+        return data;
+      })
       .then(setStatus)
       .catch(() => setStatus({ unavailable: true }));
   }, []);

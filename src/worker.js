@@ -2002,7 +2002,7 @@ async function handleRequest(request, env, requestContext) {
         const session = await readDashboardSession(env.DB, request);
         return session
           ? jsonResponse({ user: publicAccount(session) })
-          : jsonResponse({ error: 'Authentication required' }, 401);
+          : jsonResponse({ user: null });
       }
 
       if (path === '/auth/logout' && request.method === 'POST') {

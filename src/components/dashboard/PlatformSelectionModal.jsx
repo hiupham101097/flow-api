@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { usePlatform } from '../../context/PlatformContext';
+import { useAuth } from '../../context/AuthContext';
 
 export default function PlatformSelectionModal() {
+  const { isAuthenticated, isLoading } = useAuth();
   const {
     platformScope,
     hasInitialChoice,
@@ -13,7 +15,7 @@ export default function PlatformSelectionModal() {
   const [rememberCookie, setRememberCookie] = useState(true);
   const [hoveredCard, setHoveredCard] = useState(null);
 
-  if (!isPlatformModalOpen) return null;
+  if (isLoading || !isAuthenticated || !isPlatformModalOpen) return null;
 
   const handleSelect = (scope) => {
     selectPlatform(scope, rememberCookie);
