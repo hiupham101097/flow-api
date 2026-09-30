@@ -95,15 +95,19 @@ function Login() {
             </>
           )}
 
-          <label className="auth-field-label" htmlFor="login-email">Email</label>
+          <label className="auth-field-label" htmlFor="login-email">
+            {needsBootstrap ? 'Tên đăng nhập hoặc email quản trị' : 'Tên đăng nhập hoặc email'}
+          </label>
           <input
             id="login-email"
             className="auth-input"
-            type="email"
+            type="text"
             required
             autoFocus={!needsBootstrap}
             autoComplete="username"
-            placeholder="name@company.com"
+            autoCapitalize="none"
+            spellCheck={false}
+            placeholder="adminesco hoặc name@company.com"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
           />

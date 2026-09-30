@@ -8,7 +8,7 @@ Dashboard dùng phiên đăng nhập phía server. Trước lần đăng nhập 
 npx wrangler secret put DASHBOARD_BOOTSTRAP_TOKEN
 ```
 
-Nhập một chuỗi ngẫu nhiên dài (ít nhất 32 byte) tại lời nhắc của Wrangler. Không lưu secret trong Git và không gửi secret qua chat. Sau đó mở `/login`, nhập secret này cùng email, tên và mật khẩu quản trị (tối thiểu 12 ký tự). Chỉ có thể tạo một tài khoản quản trị đầu tiên; sau khi tạo xong, endpoint bootstrap sẽ đóng.
+Nhập một chuỗi ngẫu nhiên dài (ít nhất 32 byte) tại lời nhắc của Wrangler. Không lưu secret trong Git và không gửi secret qua chat. Sau đó mở `/login`, nhập secret này cùng tên đăng nhập hoặc email, tên hiển thị và mật khẩu quản trị (tối thiểu 12 ký tự). Chỉ có thể tạo một tài khoản quản trị đầu tiên; sau khi tạo xong, endpoint bootstrap sẽ đóng.
 
 ## Tenant dữ liệu
 

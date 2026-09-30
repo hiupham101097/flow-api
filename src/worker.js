@@ -1528,6 +1528,10 @@ const publicAccount = (account) => ({
 });
 
 const isValidPassword = (value) => typeof value === 'string' && value.length >= 12 && value.length <= 256;
+const isValidLoginIdentifier = (value) => {
+  if (typeof value !== 'string' || value.length < 3 || value.length > 254 || /\s/.test(value)) return false;
+  return value.includes('@') || /^[a-z0-9][a-z0-9._-]{2,31}$/i.test(value);
+};
 
 // Dùng ở khối catch của các endpoint đọc: phân biệt hết hạn mức với lỗi thật.
 const readErrorResponse = (err, extra = {}, db = null, context = {}) => {
@@ -1909,11 +1913,11 @@ async function handleRequest(request, env, requestContext) {
           return jsonResponse({ error: 'Setup token is invalid or owner setup is already complete.' }, 403);
         }
 
-        const email = String(body.email || '').trim().toLowerCase();
+        const email = String(body.username || body.email || '').trim().toLowerCase();
         const name = String(body.name || '').trim();
         const password = body.password;
-        if (!email || !email.includes('@') || !name || !isValidPassword(password)) {
-          return jsonResponse({ error: 'Enter a valid email, name, and password of at least 12 characters.' }, 400);
+        if (!isValidLoginIdentifier(email) || !name || !isValidPassword(password)) {
+          return jsonResponse({ error: 'Enter a valid username or email, name, and password of at least 12 characters.' }, 400);
         }
 
         const passwordRecord = await hashDashboardPassword(password);
@@ -1936,7 +1940,7 @@ async function handleRequest(request, env, requestContext) {
 
       if (path === '/auth/login' && request.method === 'POST') {
         const body = await request.json().catch(() => ({}));
-        const email = String(body.email || '').trim().toLowerCase();
+        const email = String(body.username || body.email || '').trim().toLowerCase();
         const rawPassword = typeof body.password === 'string' ? body.password : '';
         const password = rawPassword.slice(0, 256);
         const now = Date.now();
@@ -1976,7 +1980,7 @@ async function handleRequest(request, env, requestContext) {
             response.headers.set('Retry-After', '900');
             return response;
           }
-          return jsonResponse({ error: 'Email hoặc mật khẩu không chính xác.' }, 401);
+          return jsonResponse({ error: 'Tên đăng nhập hoặc mật khẩu không chính xác.' }, 401);
         }
 
         await env.DB.prepare('DELETE FROM auth_login_attempts WHERE attempt_key = ?').bind(attemptKey).run();
