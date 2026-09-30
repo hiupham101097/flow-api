@@ -789,6 +789,10 @@ input:focus-visible {
   border-bottom: 1px solid var(--line);
 }
 
+.log-panel-header {
+  align-items: flex-start;
+}
+
 .log-title-group {
   flex: 1 1 240px;
   min-width: 0;
